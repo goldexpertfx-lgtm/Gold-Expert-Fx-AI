@@ -159,7 +159,7 @@ def continuous_request_processor():
                 row = cursor.fetchone()
                 conn.close()
 
-                # ⏳ FIX 2: Agar user ne group leave kiya tha, to 12 ghante baad hi approve hoga
+                # ⏳ FIX 2: Agar user ne group leave kiya تھا, to 12 ghante baad hi approve hoga
                 if row and (current_now - row[0]) >= twelve_hours:
                     print(f"✅ 12 Hours passed for left user {user_id}. Approving now.")
                     execute_approval(user_id, chat_id)
@@ -185,22 +185,18 @@ def execute_approval(user_id, chat_id):
     conn.commit()
     conn.close()
 
-# 🚀 Anti-Conflict Execution Loop
+# 🚀 Anti-Conflict Execution Loop (UPDATED FOR RENDER)
 if __name__ == "__main__":
     # Background thread for join request approval
     threading.Thread(target=continuous_request_processor, daemon=True).start()
     print("🚀 Anti-Conflict System active. Booting up polling...")
     
-    while True:
-        try:
-            bot.remove_webhook()
-            bot.polling(none_stop=True, timeout=60, long_polling_timeout=60)
-        except ApiTelegramException as ex:
-            if ex.error_code == 409:
-                print("⚠️ 409 Conflict occurred (Render deployment overlay). Waiting 10 seconds...")
-                time.sleep(10)
-            else:
-                time.sleep(5)
-        except Exception:
-            time.sleep(5)
-                     
+    # Pehle se maujood kisi bhi purane webhook ko saaf karein
+    try:
+        bot.remove_webhook()
+    except Exception as e:
+        print(f"Webhook remove warning: {e}")
+        
+    # Advanced infinity polling jo crash nahi hoti aur logs ko clear rakhti hai
+    bot.infinity_polling(timeout=20, long_polling_timeout=5)
+    
