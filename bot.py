@@ -10,7 +10,7 @@ import sys
 # ⚙️ CONFIGURATION 
 # =====================================================================
 API_TOKEN = "8851943854:AAGfy9xw9srlQCE5g_yH0hMYqjPsI5NC-e4"  # ⚠️ Apne bot ka real Telegram Token yahan dalein
-OWNER_ID = 7415265825  # 👑 Prince Bhai aapki Admin ID locked hai
+OWNER_ID = 7415265825  # 👑 Admin ID locked
 
 FREE_GROUP_ID = -4477244119
 PRIVATE_CHANNEL_ID = -3870933647
@@ -20,7 +20,7 @@ if not API_TOKEN:
     print("❌ ERROR: API_TOKEN khali hai! Please insert your token.")
     sys.exit(1)
 
-# threaded=False lagane se telebot background me khud se threads nahi banaye ga
+# Single thread mode to completely eliminate python level internal conflicts
 bot = telebot.TeleBot(API_TOKEN, threaded=False)
 
 # 🗄️ Database Setup
@@ -61,15 +61,12 @@ def catch_and_buffer_requests(update):
     """, (user_id, chat_id, current_time))
     conn.commit()
     conn.close()
-    print(f"📥 New Join Request Buffered: User {user_id}")
+    print(f"📥 New Request Buffered into DB: User {user_id}")
 
 # 🛡️ Group Link Filter & Auto-Delete Engine
 @bot.message_handler(content_types=['text', 'new_chat_members', 'left_chat_member'])
 def handle_group_messages(message):
     
-    if message.text:
-        print(f"📩 [LOG] Message in Chat: {message.chat.id} from User: {message.from_user.id if message.from_user else 'Unknown'}")
-
     # 1. System Clean (Join/Leave Notification Remover)
     if message.content_type in ['new_chat_members', 'left_chat_member']:
         try:
@@ -112,11 +109,11 @@ def handle_group_messages(message):
 
             try:
                 bot.delete_message(message.chat.id, message.message_id)
-                print(f"🗑️ SUCCESS: Deleted link.")
+                print(f"🗑️ SUCCESS: Deleted user link.")
             except Exception as e:
                 print(f"❌ FAILED to delete link: {e}")
 
-# 🔄 24/7 Global Engine For Join Requests (STRICT EXTRA LIVE CHECK)
+# 🔄 24/7 Global Engine For Join Requests (STRICT EXTRA SAFETY)
 def continuous_request_processor():
     while True:
         try:
@@ -130,19 +127,32 @@ def continuous_request_processor():
             twelve_hours = 12 * 60 * 60
 
             for user_id, chat_id in pending_requests:
-                is_in_group = False
+                # Default safety: Maan ke chalo user group mein ho sakta hai jab tak check confirm na ho
+                is_in_group = True 
+                network_error = False
+
                 try:
                     chat_member = bot.get_chat_member(FREE_GROUP_ID, user_id)
-                    # Agar user active hai to strict check lagao
-                    if chat_member.status in ['member', 'administrator', 'creator']:
+                    if chat_member.status in ['left', 'kicked']:
+                        is_in_group = False
+                    else:
                         is_in_group = True
-                except Exception as e:
-                    print(f"Error checking member status for {user_id}: {e}")
-                    is_in_group = False
+                except ApiTelegramException as api_ex:
+                    if api_ex.error_code == 400: # User never even opened the group
+                        is_in_group = False
+                    else:
+                        network_error = True
+                except Exception:
+                    network_error = True
 
-                # 🛑 STRICT RULE 1: Agar banda pehle se group ka active subscriber/member hai, to usey BILKUL approve nahi karna!
+                # 🛑 CRITICAL SAFEGUARD 1: Agar net gap/409 error aaya hai, to request ko touch nahi karna, agli bar check karenge
+                if network_error:
+                    print(f"⚠️ Network lag for {user_id}. Skipping to prevent wrong approval.")
+                    continue
+
+                # 🛑 CRITICAL SAFEGUARD 2: Agar banda already group me hai, to usey BILKUL approve nahi karna!
                 if is_in_group:
-                    print(f"❌ STRICT BLOCK: User {user_id} is ALREADY IN COMMUNITY. Skipping approval (Keeping Pending).")
+                    print(f"❌ STRICT BLOCK: User {user_id} is ACTIVE in community. Keeping Pending.")
                     continue  
 
                 # Group se leave karne walon ka data check karein
@@ -152,26 +162,25 @@ def continuous_request_processor():
                 row = cursor.fetchone()
                 conn.close()
 
-                # ⏳ RULE 2: Agar user ne group leave kiya tha, to 12 ghante baad hi approve hoga
+                # ⏳ RULE 2: Left users ke liye 12-hour penalty condition
                 if row and (current_now - row[0]) >= twelve_hours:
-                    print(f"✅ 12 Hours passed for left user {user_id}. Approving now.")
+                    print(f"✅ 12 Hours passed for left user {user_id}. Approving.")
                     execute_approval(user_id, chat_id)
                 
-                # ✨ RULE 3: Agar bilkul naya banda hai (jiski database mein koi history nahi hai)
+                # ✨ RULE 3: Bilkul naya banda (no group history)
                 elif not row:
-                    print(f"✨ Completely new user {user_id}. Approving request instantly.")
+                    print(f"✨ Completely new user {user_id}. Instant Entry.")
                     execute_approval(user_id, chat_id)
 
         except Exception as e:
             print(f"⚠️ Loop warning: {e}")
-        time.sleep(15)
+        time.sleep(12)
 
 def execute_approval(user_id, chat_id):
     try:
         bot.approve_chat_join_request(chat_id, user_id)
-        print(f"✅ Approved Successfully: User {user_id}")
     except Exception as e:
-        print(f"❌ Could not approve user {user_id}: {e}")
+        print(f"❌ Execution fail for {user_id}: {e}")
         
     conn = sqlite3.connect("new_join_filter_bot.db")
     cursor = conn.cursor()
@@ -179,25 +188,22 @@ def execute_approval(user_id, chat_id):
     conn.commit()
     conn.close()
 
-# 🚀 Anti-Conflict Single-Threaded Polling Loop
+# 🚀 Anti-Conflict Ultra Polling Loop
 if __name__ == "__main__":
-    # Request loop background thread me start karein
     threading.Thread(target=continuous_request_processor, daemon=True).start()
-    print("🚀 Custom Single-Threaded Mode active. Booting up...")
+    print("🚀 Custom Ultra-Single Threaded Mode active. Booting...")
     
     while True:
         try:
             bot.remove_webhook()
-            # non_stop=False aur use_threads=False lagane se 409 multi-threading bilkul block ho jati hai
-            bot.polling(non_stop=False, timeout=20, long_polling_timeout=5)
+            # strictly single session limits to avoid multiple hook catch loops on render
+            bot.polling(none_stop=False, timeout=10, long_polling_timeout=3)
         except ApiTelegramException as ex:
             if ex.error_code == 409:
-                print("⚠️ 409 Conflict occurred (Render background overlay). Retrying in 10 seconds...")
+                print("⚠️ 409 Conflict handled. Waiting 10 seconds...")
                 time.sleep(10)
             else:
-                print(f"Telegram API Exception: {ex}")
                 time.sleep(5)
-        except Exception as e:
-            print(f"System handled error: {e}")
+        except Exception:
             time.sleep(5)
     
