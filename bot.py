@@ -12,8 +12,8 @@ API_TOKEN = "8851943854:AAGfy9xw9srlQCE5g_yH0hMYqjPsI5NC-e4"  # ⚠️ Is naye b
 OWNER_ID = 7415265825  # 👑 Aapki Admin ID locked hai
 
 # Channel & Group IDs
-FREE_GROUP_ID = -4477244119 
-PRIVATE_CHANNEL_ID = -3870933647 
+FREE_GROUP_ID = -4477244119
+PRIVATE_CHANNEL_ID = -3870933647
 # =====================================================================
 
 bot = telebot.TeleBot(API_TOKEN)
@@ -87,14 +87,12 @@ def handle_group_messages(message):
 
     # 2. Strict Link Eraser (Automatic Channel Link Post Clear Included)
     if message.chat.id == FREE_GROUP_ID and message.text:
-        # Regex to capture http, https, www, and t.me short links
         url_pattern = r'(https?://[^\s]+|www\.[^\s]+|\bt\.me/[^\s]+)'
         has_link = re.search(url_pattern, message.text, re.IGNORECASE)
 
         if has_link:
-            # Check 1: Agar private channel se auto-forward ho kar aaya hai (linked chat features)
+            # Check 1: Private channel automatic forwarding sync
             is_from_private_channel = False
-            
             if message.forward_from_chat and message.forward_from_chat.id == PRIVATE_CHANNEL_ID:
                 is_from_private_channel = True
             elif message.sender_chat and message.sender_chat.id == PRIVATE_CHANNEL_ID:
@@ -180,19 +178,31 @@ def execute_approval(user_id, chat_id):
     conn.close()
 
 
+# 🚀 Anti-Conflict Smart Run Loop
 if __name__ == "__main__":
-    # Purane kisi bhi webhook/conflict ko clear karne ke liye
-    try:
-        bot.remove_webhook()
-        print("🧼 Old webhooks successfully cleared.")
-    except Exception as e:
-        print(f"⚠️ Webhook clear warning: {e}")
-        
-    # Start background processing thread
+    # Start background logic
     threading.Thread(target=continuous_request_processor, daemon=True).start()
     
-    print("🚀 New Gold Expert Filter Bot is fully active...")
+    print("🚀 New Gold Expert Filter Bot is initialized. Starting anti-conflict engine...")
     
-    # skip_pending=True updates ko crash hone se bachayega aur polling smooth chalegi
-    bot.infinity_polling(timeout=15, skip_pending=True)
-    
+    while True:
+        try:
+            try:
+                bot.remove_webhook()
+            except Exception:
+                pass
+                
+            print("🟢 Bot polling started successfully...")
+            bot.polling(none_stop=True, timeout=20, long_polling_timeout=20)
+            
+        except ApiTelegramException as ex:
+            if ex.error_code == 409:
+                print("⚠️ Conflict 409 Detected (Render duplicate process running). Retrying in 5 seconds...")
+                time.sleep(5)
+            else:
+                print(f"❌ Telegram API Error: {ex}. Reconnecting...")
+                time.sleep(5)
+        except Exception as e:
+            print(f"⚠️ General network exception: {e}. Reconnecting...")
+            time.sleep(5)
+            
