@@ -16,7 +16,6 @@ FREE_GROUP_ID = -4477244119
 PRIVATE_CHANNEL_ID = -3870933647
 # =====================================================================
 
-# Strict Token Check
 if not API_TOKEN:
     print("❌ ERROR: API_TOKEN is empty! Please insert your token.")
     sys.exit(1)
@@ -63,20 +62,25 @@ def catch_and_buffer_requests(update):
     conn.close()
     print(f"📥 New Join Request Buffered: User {user_id}")
 
-# 🛡️ Group Link Filter & Auto-Delete Engine
+# 🛡️ Group Link Filter & Auto-Delete Engine WITH DEBUGGING
 @bot.message_handler(content_types=['text', 'new_chat_members', 'left_chat_member'])
 def handle_group_messages(message):
+    
+    # 📝 DEBUG LOG: Har message ko track karne ke liye (Render logs me dikhega)
+    if message.text:
+        print(f"📩 [LOG] Message received in Chat ID: {message.chat.id} from User ID: {message.from_user.id if message.from_user else 'Unknown'}")
+        print(f"📝 [LOG] Text: {message.text[:50]}")
+
     # 1. System Clean (Join/Leave Notification Remover)
     if message.content_type in ['new_chat_members', 'left_chat_member']:
         try:
             bot.delete_message(message.chat.id, message.message_id)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"❌ System notification delete failed: {e}")
 
         if message.chat.id == FREE_GROUP_ID and message.left_chat_member:
             left_user_id = message.left_chat_member.id
             leave_time = time.time()
-            
             conn = sqlite3.connect("new_join_filter_bot.db")
             cursor = conn.cursor()
             cursor.execute("INSERT OR REPLACE INTO member_activity VALUES (?, ?)", (left_user_id, leave_time))
@@ -84,39 +88,41 @@ def handle_group_messages(message):
             conn.close()
         return
 
-    # 2. Channel Auto-Forward Link Cleaner
-    if message.chat.id == FREE_GROUP_ID and message.text:
-        url_pattern = r'(https?://[^\s]+|www\.[^\s]+|\bt\.me/[^\s]+)'
+    # 2. Strict Link Catching System (Capture matches anywhere in text)
+    if message.text:
+        # Regex to catch any link (http, https, www, t.me, .com, .net, etc.)
+        url_pattern = r'(https?://[^\s]+|www\.[^\s]+|\bt\.me/[^\s]+|[a-zA-r0-9\-\.]+\.(com|net|org|me|info|biz|co|xyz|io|cc|tk|ml|cf|gq|club|online|site|store|tech|vip|app|live|pro|icu|top|win|loan|men|bid|ren|stream|date|download|party|racing|trade|webcam|faith|review|science))'
         has_link = re.search(url_pattern, message.text, re.IGNORECASE)
 
         if has_link:
-            is_from_private_channel = False
+            print(f"🚨 Link Detected! Analyzing sender status...")
             
-            # Channel linked feature tracking
+            # CONDITION A: Agar message aapke Linked Private Channel se auto-forward ho kar aaya hai
+            is_from_private_channel = False
             if message.forward_from_chat and message.forward_from_chat.id == PRIVATE_CHANNEL_ID:
                 is_from_private_channel = True
             elif message.sender_chat and message.sender_chat.id == PRIVATE_CHANNEL_ID:
                 is_from_private_channel = True
 
-            # Drop link if matched from target channel
             if is_from_private_channel:
                 try:
                     bot.delete_message(message.chat.id, message.message_id)
-                    print(f"🗑️ Deleted automatic linked channel post with link.")
+                    print(f"🗑️ SUCCESS: Deleted automatic channel linked post.")
                 except Exception as e:
-                    print(f"❌ Link deletion failed: {e}")
+                    print(f"❌ FAILED to delete channel post. Check Bot Admin Permissions: {e}")
                 return
 
-            # Owner manual bypass check
+            # CONDITION B: Agar Owner manually link send kare (Bypass)
             if message.from_user and message.from_user.id == OWNER_ID and not message.forward_from_chat:
+                print("👑 Owner detected. Link allowed.")
                 return
 
-            # Delete any other standard links from members
+            # CONDITION C: Koi bhi normal user ya extra channel jo link send kare (Strict Delete)
             try:
                 bot.delete_message(message.chat.id, message.message_id)
-                print(f"🗑️ Deleted link from group user.")
+                print(f"🗑️ SUCCESS: Deleted standard link from member.")
             except Exception as e:
-                print(f"❌ Error deleting member link: {e}")
+                print(f"❌ FAILED to delete normal user link. Ensure bot is Admin with delete rights! Error: {e}")
 
 # 🔄 24/7 Global Engine
 def continuous_request_processor():
@@ -177,14 +183,13 @@ if __name__ == "__main__":
     while True:
         try:
             bot.remove_webhook()
-            # Smooth polling session setup
             bot.polling(none_stop=True, timeout=60, long_polling_timeout=60)
         except ApiTelegramException as ex:
             if ex.error_code == 409:
-                print("⚠️ 409 Conflict occurred. Waiting 10 seconds for old session to close...")
+                print("⚠️ 409 Conflict occurred. Waiting 10 seconds...")
                 time.sleep(10)
             else:
                 time.sleep(5)
         except Exception:
             time.sleep(5)
-            
+                    
