@@ -9,7 +9,7 @@ import sys
 # =====================================================================
 # ⚙️ CONFIGURATION 
 # =====================================================================
-API_TOKEN = "8851943854:AAGfy9xw9srlQCE5g_yH0hMYqjPsI5NC-e4"  # ⚠️ Is naye bot ka real Telegram Token yahan dalein
+API_TOKEN = "8851943854:AAGfy9xw9srlQCE5g_yH0hMYqjPsI5NC-e4"  # ⚠️ Apne bot ka real Telegram Token yahan dalein
 OWNER_ID = 7415265825  # 👑 Aapki Admin ID locked hai
 
 FREE_GROUP_ID = -4477244119
@@ -17,12 +17,12 @@ PRIVATE_CHANNEL_ID = -3870933647
 # =====================================================================
 
 if not API_TOKEN:
-    print("❌ ERROR: API_TOKEN is empty! Please insert your token.")
+    print("❌ ERROR: API_TOKEN khali hai! Please insert your token.")
     sys.exit(1)
 
 bot = telebot.TeleBot(API_TOKEN)
 
-# Database Setup
+# 🗄️ Database Setup
 def init_db():
     conn = sqlite3.connect("new_join_filter_bot.db")
     cursor = conn.cursor()
@@ -62,7 +62,7 @@ def catch_and_buffer_requests(update):
     conn.close()
     print(f"📥 New Join Request Buffered: User {user_id}")
 
-# 🛡️ Group Link Filter & Auto-Delete Engine WITH DEBUGGING
+# 🛡️ Group Link Filter & Auto-Delete Engine
 @bot.message_handler(content_types=['text', 'new_chat_members', 'left_chat_member'])
 def handle_group_messages(message):
     
@@ -86,9 +86,10 @@ def handle_group_messages(message):
             cursor.execute("INSERT OR REPLACE INTO member_activity VALUES (?, ?)", (left_user_id, leave_time))
             conn.commit()
             conn.close()
+            print(f"🚪 Left User Saved to DB: {left_user_id} at {leave_time}")
         return
 
-    # 2. Strict Link Catching System (Capture matches anywhere in text)
+    # 2. Strict Link Catching System
     if message.text:
         # Regex to catch any link (http, https, www, t.me, .com, .net, etc.)
         url_pattern = r'(https?://[^\s]+|www\.[^\s]+|\bt\.me/[^\s]+|[a-zA-r0-9\-\.]+\.(com|net|org|me|info|biz|co|xyz|io|cc|tk|ml|cf|gq|club|online|site|store|tech|vip|app|live|pro|icu|top|win|loan|men|bid|ren|stream|date|download|party|racing|trade|webcam|faith|review|science))'
@@ -97,7 +98,7 @@ def handle_group_messages(message):
         if has_link:
             print(f"🚨 Link Detected! Analyzing sender status...")
             
-            # CONDITION A: Agar message aapke Linked Private Channel se auto-forward ho kar aaya hai
+            # CONDITION A: Linked Private Channel ki auto-forwarded posts ko delete karega
             is_from_private_channel = False
             if message.forward_from_chat and message.forward_from_chat.id == PRIVATE_CHANNEL_ID:
                 is_from_private_channel = True
@@ -117,14 +118,14 @@ def handle_group_messages(message):
                 print("👑 Owner detected. Link allowed.")
                 return
 
-            # CONDITION C: Koi bhi normal user ya extra channel jo link send kare (Strict Delete)
+            # CONDITION C: Koi bhi normal user ya doosra admin link send kare (Strict Delete)
             try:
                 bot.delete_message(message.chat.id, message.message_id)
-                print(f"🗑️ SUCCESS: Deleted standard link from member.")
+                print(f"🗑️ SUCCESS: Deleted standard link from member/admin.")
             except Exception as e:
-                print(f"❌ FAILED to delete normal user link. Ensure bot is Admin with delete rights! Error: {e}")
+                print(f"❌ FAILED to delete user link. Ensure bot is Admin with delete rights! Error: {e}")
 
-# 🔄 24/7 Global Engine
+# 🔄 24/7 Global Engine For Join Requests (FIXED LOGIC)
 def continuous_request_processor():
     while True:
         try:
@@ -146,18 +147,26 @@ def continuous_request_processor():
                 except Exception:
                     is_in_group = False
 
+                # 🚫 FIX 1: Agar user ALREADY group ka subscriber/member hai, to auto-approve NAHI karega
                 if is_in_group:
-                    continue
+                    print(f"⏳ User {user_id} is an active group member. Keeping request PENDING.")
+                    continue  # Loop agle user par chala jayega, iski request pending rahegi
 
+                # Group se leave karne walon ka data check karein
                 conn = sqlite3.connect("new_join_filter_bot.db")
                 cursor = conn.cursor()
                 cursor.execute("SELECT leave_timestamp FROM member_activity WHERE user_id = ?", (user_id,))
                 row = cursor.fetchone()
                 conn.close()
 
+                # ⏳ FIX 2: Agar user ne group leave kiya tha, to 12 ghante baad hi approve hoga
                 if row and (current_now - row[0]) >= twelve_hours:
+                    print(f"✅ 12 Hours passed for left user {user_id}. Approving now.")
                     execute_approval(user_id, chat_id)
+                
+                # ✨ FIX 3: Agar bilkul naya banda hai (jiski database mein koi history nahi hai)
                 elif not row:
+                    print(f"✨ Completely new user {user_id}. Approving request instantly.")
                     execute_approval(user_id, chat_id)
 
         except Exception as e:
@@ -167,8 +176,9 @@ def continuous_request_processor():
 def execute_approval(user_id, chat_id):
     try:
         bot.approve_chat_join_request(chat_id, user_id)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"❌ Could not approve user {user_id}: {e}")
+        
     conn = sqlite3.connect("new_join_filter_bot.db")
     cursor = conn.cursor()
     cursor.execute("DELETE FROM pending_channel_requests WHERE user_id = ? AND chat_id = ?", (user_id, chat_id))
@@ -177,6 +187,7 @@ def execute_approval(user_id, chat_id):
 
 # 🚀 Anti-Conflict Execution Loop
 if __name__ == "__main__":
+    # Background thread for join request approval
     threading.Thread(target=continuous_request_processor, daemon=True).start()
     print("🚀 Anti-Conflict System active. Booting up polling...")
     
@@ -186,10 +197,10 @@ if __name__ == "__main__":
             bot.polling(none_stop=True, timeout=60, long_polling_timeout=60)
         except ApiTelegramException as ex:
             if ex.error_code == 409:
-                print("⚠️ 409 Conflict occurred. Waiting 10 seconds...")
+                print("⚠️ 409 Conflict occurred (Render deployment overlay). Waiting 10 seconds...")
                 time.sleep(10)
             else:
                 time.sleep(5)
         except Exception:
             time.sleep(5)
-                    
+                     
