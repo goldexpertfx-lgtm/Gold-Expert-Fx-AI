@@ -12,8 +12,8 @@ API_TOKEN = "8851943854:AAGfy9xw9srlQCE5g_yH0hMYqjPsI5NC-e4"  # ⚠️ Is naye b
 OWNER_ID = 7415265825  # 👑 Aapki Admin ID locked hai
 
 # Channel & Group IDs
-FREE_GROUP_ID = -4477244119  
-PRIVATE_CHANNEL_ID = -3870933647  
+FREE_GROUP_ID = -4477244119 
+PRIVATE_CHANNEL_ID = -3870933647 
 # =====================================================================
 
 bot = telebot.TeleBot(API_TOKEN)
@@ -181,8 +181,18 @@ def execute_approval(user_id, chat_id):
 
 
 if __name__ == "__main__":
+    # Purane kisi bhi webhook/conflict ko clear karne ke liye
+    try:
+        bot.remove_webhook()
+        print("🧼 Old webhooks successfully cleared.")
+    except Exception as e:
+        print(f"⚠️ Webhook clear warning: {e}")
+        
+    # Start background processing thread
     threading.Thread(target=continuous_request_processor, daemon=True).start()
     
-    print("🚀 New Gold Expert Filter Bot is fully active (Fixed Auto-Channel Links)...")
-    bot.infinity_polling(timeout=15)
+    print("🚀 New Gold Expert Filter Bot is fully active...")
+    
+    # skip_pending=True updates ko crash hone se bachayega aur polling smooth chalegi
+    bot.infinity_polling(timeout=15, skip_pending=True)
     
