@@ -1,5 +1,4 @@
-import telebot
-from telebot.apihelper import ApiTelegramException
+import requests
 import sqlite3
 import time
 import threading
@@ -10,7 +9,7 @@ import sys
 # ⚙️ CONFIGURATION 
 # =====================================================================
 API_TOKEN = "8851943854:AAGfy9xw9srlQCE5g_yH0hMYqjPsI5NC-e4"  # ⚠️ Apne bot ka real Telegram Token yahan dalein
-OWNER_ID = 7415265825  # 👑 Prince Bhai Admin ID Locked
+OWNER_ID = 7415265825  # 👑 Admin ID Locked
 
 FREE_GROUP_ID = -4477244119
 PRIVATE_CHANNEL_ID = -3870933647
@@ -20,9 +19,9 @@ if not API_TOKEN:
     print("❌ ERROR: API_TOKEN khali hai!")
     sys.exit(1)
 
-# Threaded ko False rakhna hai taake naye background conflicts na banein
-bot = telebot.TeleBot(API_TOKEN, threaded=False)
+BASE_URL = f"https://api.telegram.org/bot{API_TOKEN}"
 
+# 🗄️ Database Setup
 def init_db():
     conn = sqlite3.connect("new_join_filter_bot.db", timeout=20)
     cursor = conn.cursor()
@@ -45,35 +44,18 @@ def init_db():
 
 init_db()
 
-@bot.chat_join_request_handler()
-def catch_and_buffer_requests(update):
-    user_id = update.from_user.id
-    chat_id = update.chat.id
-    current_time = time.time()
+# 🛡️ Link Cleaner & Message Engine
+def handle_incoming_message(msg):
+    chat_id = msg.get("chat", {}).get("id")
+    message_id = msg.get("message_id")
+    text = msg.get("text", "")
     
-    try:
-        conn = sqlite3.connect("new_join_filter_bot.db", timeout=20)
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT OR IGNORE INTO pending_channel_requests (user_id, chat_id, request_time) 
-            VALUES (?, ?, ?)
-        """, (user_id, chat_id, current_time))
-        conn.commit()
-        conn.close()
-        print(f"📥 Buffered Request: User {user_id}")
-    except Exception as db_err:
-        print(f"Database write delay: {db_err}")
-
-@bot.message_handler(content_types=['text', 'new_chat_members', 'left_chat_member'])
-def handle_group_messages(message):
-    if message.content_type in ['new_chat_members', 'left_chat_member']:
-        try:
-            bot.delete_message(message.chat.id, message.message_id)
-        except Exception:
-            pass
-
-        if message.chat.id == FREE_GROUP_ID and message.left_chat_member:
-            left_user_id = message.left_chat_member.id
+    # 1. System Clean (Join/Leave Notification Remover)
+    if "new_chat_members" in msg or "left_chat_member" in msg:
+        requests.post(f"{BASE_URL}/deleteMessage", json={"chat_id": chat_id, "message_id": message_id})
+        
+        if chat_id == FREE_GROUP_ID and "left_chat_member" in msg:
+            left_user_id = msg["left_chat_member"]["id"]
             leave_time = time.time()
             try:
                 conn = sqlite3.connect("new_join_filter_bot.db", timeout=20)
@@ -82,34 +64,31 @@ def handle_group_messages(message):
                 conn.commit()
                 conn.close()
                 print(f"🚪 Left User Saved: {left_user_id}")
-            except Exception:
-                pass
+            except Exception: pass
         return
 
-    if message.text:
+    # 2. Strict Link Catching System
+    if text:
         url_pattern = r'(https?://[^\s]+|www\.[^\s]+|\bt\.me/[^\s]+|[a-zA-r0-9\-\.]+\.(com|net|org|me|info|biz|co|xyz|io|cc|tk|ml|cf|gq|club|online|site|store|tech|vip|app|live|pro|icu|top|win|loan|men|bid|ren|stream|date|download|party|racing|trade|webcam|faith|review|science))'
-        has_link = re.search(url_pattern, message.text, re.IGNORECASE)
-
-        if has_link:
+        if re.search(url_pattern, text, re.IGNORECASE):
+            # Check for forward channel bypass
             is_from_private_channel = False
-            if message.forward_from_chat and message.forward_from_chat.id == PRIVATE_CHANNEL_ID:
+            if msg.get("forward_from_chat", {}).get("id") == PRIVATE_CHANNEL_ID:
                 is_from_private_channel = True
-            elif message.sender_chat and message.sender_chat.id == PRIVATE_CHANNEL_ID:
+            elif msg.get("sender_chat", {}).get("id") == PRIVATE_CHANNEL_ID:
                 is_from_private_channel = True
 
             if is_from_private_channel:
-                try: bot.delete_message(message.chat.id, message.message_id)
-                except Exception: pass
+                requests.post(f"{BASE_URL}/deleteMessage", json={"chat_id": chat_id, "message_id": message_id})
                 return
 
-            if message.from_user and message.from_user.id == OWNER_ID and not message.forward_from_chat:
+            from_user_id = msg.get("from", {}).get("id")
+            if from_user_id == OWNER_ID and "forward_from_chat" not in msg:
                 return
 
-            try:
-                bot.delete_message(message.chat.id, message.message_id)
-            except Exception:
-                pass
+            requests.post(f"{BASE_URL}/deleteMessage", json={"chat_id": chat_id, "message_id": message_id})
 
+# 🔄 24/7 Global Engine For Join Requests (STRICT BYPASS SAFETY)
 def continuous_request_processor():
     while True:
         try:
@@ -123,30 +102,26 @@ def continuous_request_processor():
             twelve_hours = 12 * 60 * 60
 
             for user_id, chat_id in pending_requests:
-                is_in_group = True 
-                network_error = False
-
+                is_in_group = True
+                
+                # Check status via direct API post
                 try:
-                    chat_member = bot.get_chat_member(FREE_GROUP_ID, user_id)
-                    if chat_member.status in ['left', 'kicked']:
-                        is_in_group = False
+                    res = requests.post(f"{BASE_URL}/getChatMember", json={"chat_id": FREE_GROUP_ID, "user_id": user_id}, timeout=10).json()
+                    if res.get("ok"):
+                        status = res["result"]["status"]
+                        if status in ["left", "kicked"]:
+                            is_in_group = False
+                        else:
+                            is_in_group = True
                     else:
-                        is_in_group = True
-                except ApiTelegramException as api_ex:
-                    if api_ex.error_code == 400: 
-                        is_in_group = False
-                    else:
-                        network_error = True
+                        # Agar conflict chal raha ho ya API error ho, to safe side rehne ke liye true rakhein taake galat approve na ho
+                        continue 
                 except Exception:
-                    network_error = True
-
-                # 🛑 Agar background conflict chal raha ho, to chup chaap skip karein taake galat approval na ho
-                if network_error:
                     continue
 
-                # 🛑 Pehle se mojood member ko STRICTLY skip aur block karna hai
+                # 🛑 STRICT RULE: Agar user ALREADY group ka subscriber/member hai, to process block!
                 if is_in_group:
-                    print(f"❌ STRICT BLOCK: User {user_id} is ALREADY IN COMMUNITY. Skipping.")
+                    print(f"❌ STRICT BLOCK: User {user_id} is active in community. Skipping Approval.")
                     continue  
 
                 conn = sqlite3.connect("new_join_filter_bot.db", timeout=20)
@@ -159,18 +134,20 @@ def continuous_request_processor():
                     print(f"✅ 12 Hours over for left user {user_id}. Approving.")
                     execute_approval(user_id, chat_id)
                 elif not row:
-                    print(f"✨ New subscriber {user_id}. Approving.")
+                    print(f"✨ Completely new user {user_id}. Approving.")
                     execute_approval(user_id, chat_id)
 
         except Exception as e:
-            print(f"Loop error handled: {e}")
+            print(f"Engine Loop delay: {e}")
         time.sleep(10)
 
 def execute_approval(user_id, chat_id):
     try:
-        bot.approve_chat_join_request(chat_id, user_id)
+        res = requests.post(f"{BASE_URL}/approveChatJoinRequest", json={"chat_id": chat_id, "user_id": user_id}, timeout=10).json()
+        if res.get("ok"):
+            print(f"🚀 Successfully Approved User: {user_id}")
     except Exception as e:
-        print(f"Approve action issue: {e}")
+        print(f"Approval fail: {e}")
         
     try:
         conn = sqlite3.connect("new_join_filter_bot.db", timeout=20)
@@ -181,21 +158,46 @@ def execute_approval(user_id, chat_id):
     except Exception:
         pass
 
+# 🚀 100% Pure Custom Manual Fetcher (No Telebot Polling Conflict)
 if __name__ == "__main__":
     threading.Thread(target=continuous_request_processor, daemon=True).start()
-    print("🚀 Bot starting in Anti-Conflict Single Thread Mode...")
+    print("🚀 Bot running on Manual Safe Loop Mode...")
     
+    offset = 0
     while True:
         try:
-            bot.remove_webhook()
-            bot.polling(none_stop=False, timeout=5, long_polling_timeout=2)
-        except ApiTelegramException as ex:
-            if ex.error_code == 409:
-                # Jab tak purana process completely kill nahi hota, yeh wait karega
-                print("⚠️ 409 Conflict Detected (Old bot instance running on Render). Waiting 15 seconds...")
-                time.sleep(15)
+            # Direct network call without library threads
+            response = requests.post(
+                f"{BASE_URL}/getUpdates", 
+                json={"offset": offset, "timeout": 10, "allowed_updates": ["message", "chat_join_request"]}, 
+                timeout=15
+            ).json()
+            
+            if response.get("ok"):
+                for update in response["result"]:
+                    offset = update["update_id"] + 1
+                    
+                    # Catch requests manually
+                    if "chat_join_request" in update:
+                        req = update["chat_join_request"]
+                        u_id = req["from"]["id"]
+                        c_id = req["chat"]["id"]
+                        
+                        conn = sqlite3.connect("new_join_filter_bot.db", timeout=20)
+                        cursor = conn.cursor()
+                        cursor.execute("INSERT OR IGNORE INTO pending_channel_requests VALUES (?, ?, ?)", (u_id, c_id, time.time()))
+                        conn.commit()
+                        conn.close()
+                        print(f"📥 Request Captured Manually: {u_id}")
+                        
+                    elif "message" in update:
+                        handle_incoming_message(update["message"])
             else:
-                time.sleep(5)
-        except Exception:
+                # Response not ok (409 conflict handles gracefully here)
+                if response.get("error_code") == 409:
+                    print("⚠️ 409 Conflict (Old ghost bot alive on Render). Pausing thread for 15s...")
+                    time.sleep(15)
+                    
+        except Exception as err:
             time.sleep(5)
         
