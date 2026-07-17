@@ -8,7 +8,7 @@ import re
 # =====================================================================
 # ⚙️ CONFIGURATION (Is naye bot ka Token aur details dalein)
 # =====================================================================
-API_TOKEN = "8851943854:AAHz1KdIVND5QPw2t-PAKPqj6Th4j7eTO28"  # ⚠️ Is naye bot ka real Telegram Token yahan dalein
+API_TOKEN = "8851943854:AAGfy9xw9srlQCE5g_yH0hMYqjPsI5NC-e4"  # ⚠️ Is naye bot ka real Telegram Token yahan dalein
 OWNER_ID = 7415265825  # 👑 Aapki Admin ID locked hai
 
 # Channel & Group IDs
@@ -85,31 +85,38 @@ def handle_group_messages(message):
             conn.close()
         return
 
-    # 2. Strict Link Eraser (Only erases links, no ban/kick/remove commands applied)
+    # 2. Strict Link Eraser (Automatic Channel Link Post Clear Included)
     if message.chat.id == FREE_GROUP_ID and message.text:
         # Regex to capture http, https, www, and t.me short links
         url_pattern = r'(https?://[^\s]+|www\.[^\s]+|\bt\.me/[^\s]+)'
         has_link = re.search(url_pattern, message.text, re.IGNORECASE)
 
         if has_link:
-            # Condition A: Owner posts directly by hand opening the group -> ALLOW
-            if message.from_user.id == OWNER_ID and message.forward_from_chat is None:
-                print("👑 Owner sent a link. Allowed.")
-                return
-
-            # Condition B: Auto-forwarded message linked from Private Channel -> DELETE
+            # Check 1: Agar private channel se auto-forward ho kar aaya hai (linked chat features)
+            is_from_private_channel = False
+            
             if message.forward_from_chat and message.forward_from_chat.id == PRIVATE_CHANNEL_ID:
+                is_from_private_channel = True
+            elif message.sender_chat and message.sender_chat.id == PRIVATE_CHANNEL_ID:
+                is_from_private_channel = True
+
+            if is_from_private_channel:
                 try:
                     bot.delete_message(message.chat.id, message.message_id)
-                    print(f"🗑️ Deleted linked channel forward from message ID: {message.message_id}")
+                    print(f"🗑️ Deleted automatic linked channel post with link from ID: {message.message_id}")
                 except Exception as e:
-                    print(f"❌ Error deleting channel forward: {e}")
+                    print(f"❌ Error deleting channel link: {e}")
                 return
 
-            # Condition C: Any other ordinary member sends a link -> DELETE
+            # Check 2: Owner agar khud manually group khol kar text message likhe -> ALLOW
+            if message.from_user and message.from_user.id == OWNER_ID and not message.forward_from_chat:
+                print("👑 Owner manually sent a link. Allowed.")
+                return
+
+            # Check 3: Koi bhi aam member ya any other forwarded message jisme link ho -> DELETE
             try:
                 bot.delete_message(message.chat.id, message.message_id)
-                print(f"🗑️ Deleted link from user {message.from_user.id}: {message.text}")
+                print(f"🗑️ Deleted link from user/sender: {message.text}")
             except Exception as e:
                 print(f"❌ Error deleting user link: {e}")
 
@@ -120,7 +127,6 @@ def continuous_request_processor():
         try:
             conn = sqlite3.connect("new_join_filter_bot.db")
             cursor = conn.cursor()
-            # Grabs old historical logs as well as new buffered records
             cursor.execute("SELECT user_id, chat_id FROM pending_channel_requests")
             pending_requests = cursor.fetchall()
             conn.close()
@@ -137,11 +143,9 @@ def continuous_request_processor():
                 except Exception:
                     is_in_group = False
 
-                # If the user is actively inside the free group -> DO NOT APPROVE (Hold in buffer safely)
                 if is_in_group:
                     continue
 
-                # If user is outside the free community group, verify logs
                 conn = sqlite3.connect("new_join_filter_bot.db")
                 cursor = conn.cursor()
                 cursor.execute("SELECT leave_timestamp FROM member_activity WHERE user_id = ?", (user_id,))
@@ -152,11 +156,9 @@ def continuous_request_processor():
                     leave_timestamp = row[0]
                     elapsed_time = current_now - leave_timestamp
                     
-                    # Approve ONLY after 12 full hours have elapsed since leaving
                     if elapsed_time >= twelve_hours_in_seconds:
                         execute_approval(user_id, chat_id)
                 else:
-                    # Fresh user or request cleared for entry
                     execute_approval(user_id, chat_id)
 
         except Exception as e:
@@ -179,9 +181,8 @@ def execute_approval(user_id, chat_id):
 
 
 if __name__ == "__main__":
-    # Runs the multi-threaded scanning process continuously in the background
     threading.Thread(target=continuous_request_processor, daemon=True).start()
     
-    print("🚀 New Gold Expert Filter Bot is fully active (Links + Join Requests Only)...")
+    print("🚀 New Gold Expert Filter Bot is fully active (Fixed Auto-Channel Links)...")
     bot.infinity_polling(timeout=15)
     
