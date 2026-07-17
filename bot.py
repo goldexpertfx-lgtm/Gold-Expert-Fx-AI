@@ -66,10 +66,8 @@ def catch_and_buffer_requests(update):
 @bot.message_handler(content_types=['text', 'new_chat_members', 'left_chat_member'])
 def handle_group_messages(message):
     
-    # 📝 DEBUG LOG: Har message ko track karne ke liye (Render logs me dikhega)
     if message.text:
-        print(f"📩 [LOG] Message received in Chat ID: {message.chat.id} from User ID: {message.from_user.id if message.from_user else 'Unknown'}")
-        print(f"📝 [LOG] Text: {message.text[:50]}")
+        print(f"📩 [LOG] Message in Chat: {message.chat.id} from User: {message.from_user.id if message.from_user else 'Unknown'}")
 
     # 1. System Clean (Join/Leave Notification Remover)
     if message.content_type in ['new_chat_members', 'left_chat_member']:
@@ -86,19 +84,15 @@ def handle_group_messages(message):
             cursor.execute("INSERT OR REPLACE INTO member_activity VALUES (?, ?)", (left_user_id, leave_time))
             conn.commit()
             conn.close()
-            print(f"🚪 Left User Saved to DB: {left_user_id} at {leave_time}")
+            print(f"🚪 Left User Saved to DB: {left_user_id}")
         return
 
     # 2. Strict Link Catching System
     if message.text:
-        # Regex to catch any link (http, https, www, t.me, .com, .net, etc.)
         url_pattern = r'(https?://[^\s]+|www\.[^\s]+|\bt\.me/[^\s]+|[a-zA-r0-9\-\.]+\.(com|net|org|me|info|biz|co|xyz|io|cc|tk|ml|cf|gq|club|online|site|store|tech|vip|app|live|pro|icu|top|win|loan|men|bid|ren|stream|date|download|party|racing|trade|webcam|faith|review|science))'
         has_link = re.search(url_pattern, message.text, re.IGNORECASE)
 
         if has_link:
-            print(f"🚨 Link Detected! Analyzing sender status...")
-            
-            # CONDITION A: Linked Private Channel ki auto-forwarded posts ko delete karega
             is_from_private_channel = False
             if message.forward_from_chat and message.forward_from_chat.id == PRIVATE_CHANNEL_ID:
                 is_from_private_channel = True
@@ -108,24 +102,20 @@ def handle_group_messages(message):
             if is_from_private_channel:
                 try:
                     bot.delete_message(message.chat.id, message.message_id)
-                    print(f"🗑️ SUCCESS: Deleted automatic channel linked post.")
-                except Exception as e:
-                    print(f"❌ FAILED to delete channel post. Check Bot Admin Permissions: {e}")
+                except Exception:
+                    pass
                 return
 
-            # CONDITION B: Agar Owner manually link send kare (Bypass)
             if message.from_user and message.from_user.id == OWNER_ID and not message.forward_from_chat:
-                print("👑 Owner detected. Link allowed.")
                 return
 
-            # CONDITION C: Koi bhi normal user ya doosra admin link send kare (Strict Delete)
             try:
                 bot.delete_message(message.chat.id, message.message_id)
-                print(f"🗑️ SUCCESS: Deleted standard link from member/admin.")
+                print(f"🗑️ SUCCESS: Deleted link.")
             except Exception as e:
-                print(f"❌ FAILED to delete user link. Ensure bot is Admin with delete rights! Error: {e}")
+                print(f"❌ FAILED to delete link: {e}")
 
-# 🔄 24/7 Global Engine For Join Requests (FIXED LOGIC)
+# 🔄 24/7 Global Engine For Join Requests (STRICT CHECK)
 def continuous_request_processor():
     while True:
         try:
@@ -147,10 +137,10 @@ def continuous_request_processor():
                 except Exception:
                     is_in_group = False
 
-                # 🚫 FIX 1: Agar user ALREADY group ka subscriber/member hai, to auto-approve NAHI karega
+                # 🛑 STRICT RULE 1: Agar user ALREADY group ka subscriber/member hai, to usey BILKUL approve nahi karna, pending rakhna hai
                 if is_in_group:
-                    print(f"⏳ User {user_id} is an active group member. Keeping request PENDING.")
-                    continue  # Loop agle user par chala jayega, iski request pending rahegi
+                    print(f"⏳ User {user_id} is already in community. SKIPPING APPROVAL (Keeping Pending).")
+                    continue  
 
                 # Group se leave karne walon ka data check karein
                 conn = sqlite3.connect("new_join_filter_bot.db")
@@ -159,19 +149,19 @@ def continuous_request_processor():
                 row = cursor.fetchone()
                 conn.close()
 
-                # ⏳ FIX 2: Agar user ne group leave kiya تھا, to 12 ghante baad hi approve hoga
+                # ⏳ RULE 2: Agar user ne group leave kiya tha, to 12 ghante baad hi approve hoga
                 if row and (current_now - row[0]) >= twelve_hours:
                     print(f"✅ 12 Hours passed for left user {user_id}. Approving now.")
                     execute_approval(user_id, chat_id)
                 
-                # ✨ FIX 3: Agar bilkul naya banda hai (jiski database mein koi history nahi hai)
+                # ✨ RULE 3: Agar bilkul naya banda hai (jiski database mein koi history nahi hai)
                 elif not row:
                     print(f"✨ Completely new user {user_id}. Approving request instantly.")
                     execute_approval(user_id, chat_id)
 
         except Exception as e:
             print(f"⚠️ Loop warning: {e}")
-        time.sleep(20)
+        time.sleep(15)
 
 def execute_approval(user_id, chat_id):
     try:
@@ -185,18 +175,23 @@ def execute_approval(user_id, chat_id):
     conn.commit()
     conn.close()
 
-# 🚀 Anti-Conflict Execution Loop (UPDATED FOR RENDER)
+# 🚀 Anti-Conflict Custom Polling Loop (No Threading Exception)
 if __name__ == "__main__":
-    # Background thread for join request approval
     threading.Thread(target=continuous_request_processor, daemon=True).start()
-    print("🚀 Anti-Conflict System active. Booting up polling...")
+    print("🚀 Anti-Conflict System active. Booting up...")
     
-    # Pehle se maujood kisi bhi purane webhook ko saaf karein
-    try:
-        bot.remove_webhook()
-    except Exception as e:
-        print(f"Webhook remove warning: {e}")
-        
-    # Advanced infinity polling jo crash nahi hoti aur logs ko clear rakhti hai
-    bot.infinity_polling(timeout=20, long_polling_timeout=5)
-    
+    while True:
+        try:
+            bot.remove_webhook()
+            # use_keys=True lagane se internal threads handle hoti hain single-thread mode me
+            bot.polling(none_stop=True, timeout=20, long_polling_timeout=5, restart_on_change=False)
+        except ApiTelegramException as ex:
+            if ex.error_code == 409:
+                print("⚠️ 409 Conflict! Render overlay running. Waiting 15 seconds to auto-heal...")
+                time.sleep(15)
+            else:
+                time.sleep(5)
+        except Exception as e:
+            print(f"System gap handled: {e}")
+            time.sleep(5)
+                
