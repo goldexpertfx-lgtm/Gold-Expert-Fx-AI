@@ -10,7 +10,7 @@ import sys
 # ⚙️ CONFIGURATION 
 # =====================================================================
 API_TOKEN = "8851943854:AAGfy9xw9srlQCE5g_yH0hMYqjPsI5NC-e4"  # ⚠️ Apne bot ka real Telegram Token yahan dalein
-OWNER_ID = 7415265825  # 👑 Aapki Admin ID locked hai
+OWNER_ID = 7415265825  # 👑 Prince Bhai aapki Admin ID locked hai
 
 FREE_GROUP_ID = -4477244119
 PRIVATE_CHANNEL_ID = -3870933647
@@ -20,7 +20,8 @@ if not API_TOKEN:
     print("❌ ERROR: API_TOKEN khali hai! Please insert your token.")
     sys.exit(1)
 
-bot = telebot.TeleBot(API_TOKEN)
+# threaded=False lagane se telebot background me khud se threads nahi banaye ga
+bot = telebot.TeleBot(API_TOKEN, threaded=False)
 
 # 🗄️ Database Setup
 def init_db():
@@ -73,8 +74,8 @@ def handle_group_messages(message):
     if message.content_type in ['new_chat_members', 'left_chat_member']:
         try:
             bot.delete_message(message.chat.id, message.message_id)
-        except Exception as e:
-            print(f"❌ System notification delete failed: {e}")
+        except Exception:
+            pass
 
         if message.chat.id == FREE_GROUP_ID and message.left_chat_member:
             left_user_id = message.left_chat_member.id
@@ -115,7 +116,7 @@ def handle_group_messages(message):
             except Exception as e:
                 print(f"❌ FAILED to delete link: {e}")
 
-# 🔄 24/7 Global Engine For Join Requests (STRICT CHECK)
+# 🔄 24/7 Global Engine For Join Requests (STRICT EXTRA LIVE CHECK)
 def continuous_request_processor():
     while True:
         try:
@@ -132,14 +133,16 @@ def continuous_request_processor():
                 is_in_group = False
                 try:
                     chat_member = bot.get_chat_member(FREE_GROUP_ID, user_id)
+                    # Agar user active hai to strict check lagao
                     if chat_member.status in ['member', 'administrator', 'creator']:
                         is_in_group = True
-                except Exception:
+                except Exception as e:
+                    print(f"Error checking member status for {user_id}: {e}")
                     is_in_group = False
 
-                # 🛑 STRICT RULE 1: Agar user ALREADY group ka subscriber/member hai, to usey BILKUL approve nahi karna, pending rakhna hai
+                # 🛑 STRICT RULE 1: Agar banda pehle se group ka active subscriber/member hai, to usey BILKUL approve nahi karna!
                 if is_in_group:
-                    print(f"⏳ User {user_id} is already in community. SKIPPING APPROVAL (Keeping Pending).")
+                    print(f"❌ STRICT BLOCK: User {user_id} is ALREADY IN COMMUNITY. Skipping approval (Keeping Pending).")
                     continue  
 
                 # Group se leave karne walon ka data check karein
@@ -166,6 +169,7 @@ def continuous_request_processor():
 def execute_approval(user_id, chat_id):
     try:
         bot.approve_chat_join_request(chat_id, user_id)
+        print(f"✅ Approved Successfully: User {user_id}")
     except Exception as e:
         print(f"❌ Could not approve user {user_id}: {e}")
         
@@ -175,23 +179,25 @@ def execute_approval(user_id, chat_id):
     conn.commit()
     conn.close()
 
-# 🚀 Anti-Conflict Custom Polling Loop (No Threading Exception)
+# 🚀 Anti-Conflict Single-Threaded Polling Loop
 if __name__ == "__main__":
+    # Request loop background thread me start karein
     threading.Thread(target=continuous_request_processor, daemon=True).start()
-    print("🚀 Anti-Conflict System active. Booting up...")
+    print("🚀 Custom Single-Threaded Mode active. Booting up...")
     
     while True:
         try:
             bot.remove_webhook()
-            # use_keys=True lagane se internal threads handle hoti hain single-thread mode me
-            bot.polling(none_stop=True, timeout=20, long_polling_timeout=5, restart_on_change=False)
+            # non_stop=False aur use_threads=False lagane se 409 multi-threading bilkul block ho jati hai
+            bot.polling(non_stop=False, timeout=20, long_polling_timeout=5)
         except ApiTelegramException as ex:
             if ex.error_code == 409:
-                print("⚠️ 409 Conflict! Render overlay running. Waiting 15 seconds to auto-heal...")
-                time.sleep(15)
+                print("⚠️ 409 Conflict occurred (Render background overlay). Retrying in 10 seconds...")
+                time.sleep(10)
             else:
+                print(f"Telegram API Exception: {ex}")
                 time.sleep(5)
         except Exception as e:
-            print(f"System gap handled: {e}")
+            print(f"System handled error: {e}")
             time.sleep(5)
-                
+    
