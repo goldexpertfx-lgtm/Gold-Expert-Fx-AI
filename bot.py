@@ -6,10 +6,10 @@ import threading
 import re
 
 # =====================================================================
-# ⚙️ CONFIGURATION (Sirf is naye bot ka Token aur details dalein)
+# ⚙️ CONFIGURATION (Is naye bot ka Token aur details dalein)
 # =====================================================================
-API_TOKEN = "8851943854:AAHz1KdIVND5QPw2t-PAKPqj6Th4j7eTO28"  # Is naye bot ka real token dalein
-OWNER_ID = 7415265825  # ⚠️ APNI Telegram ID dalein
+API_TOKEN = "8851943854:AAHz1KdIVND5QPw2t-PAKPqj6Th4j7eTO28"  # ⚠️ Is naye bot ka real Telegram Token yahan dalein
+OWNER_ID = 7415265825  # 👑 Aapki Admin ID locked hai
 
 # Channel & Group IDs
 FREE_GROUP_ID = -4477244119  
@@ -18,7 +18,7 @@ PRIVATE_CHANNEL_ID = -3870933647
 
 bot = telebot.TeleBot(API_TOKEN)
 
-# Database Setup (Is naye bot ke liye alag database name use kiya hai taake purana safe rahe)
+# Database Setup
 def init_db():
     conn = sqlite3.connect("new_join_filter_bot.db")
     cursor = conn.cursor()
@@ -42,7 +42,7 @@ def init_db():
 init_db()
 
 
-# 📥 New Join Requests Incoming Collector (Buffer - Saves requests, never declines/dismisses them)
+# 📥 New Join Requests Incoming Collector (Buffer - Never declines/dismisses)
 @bot.chat_join_request_handler()
 def catch_and_buffer_requests(update):
     user_id = update.from_user.id
@@ -57,6 +57,7 @@ def catch_and_buffer_requests(update):
     """, (user_id, chat_id, current_time))
     conn.commit()
     conn.close()
+    print(f"📥 New Join Request Buffered: User {user_id} in Chat {chat_id}")
 
 
 # 🛡️ Main Group Filter (System Notification Cleaner + Strict Link Only Remover)
@@ -86,27 +87,31 @@ def handle_group_messages(message):
 
     # 2. Strict Link Eraser (Only erases links, no ban/kick/remove commands applied)
     if message.chat.id == FREE_GROUP_ID and message.text:
+        # Regex to capture http, https, www, and t.me short links
         url_pattern = r'(https?://[^\s]+|www\.[^\s]+|\bt\.me/[^\s]+)'
         has_link = re.search(url_pattern, message.text, re.IGNORECASE)
 
         if has_link:
             # Condition A: Owner posts directly by hand opening the group -> ALLOW
             if message.from_user.id == OWNER_ID and message.forward_from_chat is None:
+                print("👑 Owner sent a link. Allowed.")
                 return
 
             # Condition B: Auto-forwarded message linked from Private Channel -> DELETE
             if message.forward_from_chat and message.forward_from_chat.id == PRIVATE_CHANNEL_ID:
                 try:
                     bot.delete_message(message.chat.id, message.message_id)
-                except Exception:
-                    pass
+                    print(f"🗑️ Deleted linked channel forward from message ID: {message.message_id}")
+                except Exception as e:
+                    print(f"❌ Error deleting channel forward: {e}")
                 return
 
             # Condition C: Any other ordinary member sends a link -> DELETE
             try:
                 bot.delete_message(message.chat.id, message.message_id)
-            except Exception:
-                pass
+                print(f"🗑️ Deleted link from user {message.from_user.id}: {message.text}")
+            except Exception as e:
+                print(f"❌ Error deleting user link: {e}")
 
 
 # 🔄 24/7 Global Engine (Scans All Old Historical Data + Real-time Naye Join Requests)
@@ -154,16 +159,17 @@ def continuous_request_processor():
                     # Fresh user or request cleared for entry
                     execute_approval(user_id, chat_id)
 
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"⚠️ Background loop warning: {e}")
             
         time.sleep(20)
 
 def execute_approval(user_id, chat_id):
     try:
         bot.approve_chat_join_request(chat_id, user_id)
-    except Exception:
-        pass
+        print(f"✅ Approved User {user_id} in Chat {chat_id}")
+    except Exception as e:
+        print(f"❌ Failed to approve user {user_id}: {e}")
     
     conn = sqlite3.connect("new_join_filter_bot.db")
     cursor = conn.cursor()
@@ -176,6 +182,6 @@ if __name__ == "__main__":
     # Runs the multi-threaded scanning process continuously in the background
     threading.Thread(target=continuous_request_processor, daemon=True).start()
     
-    print("New Gold Expert Filter Bot is fully active (Links + Join Requests Only)...")
+    print("🚀 New Gold Expert Filter Bot is fully active (Links + Join Requests Only)...")
     bot.infinity_polling(timeout=15)
-                      
+    
