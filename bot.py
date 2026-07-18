@@ -52,10 +52,47 @@ def init_db():
             target_user_id INTEGER
         )
     """)
+    # 📝 Table to save dynamic content changes from the bot
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS dynamic_content (
+            service_key TEXT PRIMARY KEY,
+            text_content TEXT
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS admin_edit_state (
+            admin_id INTEGER PRIMARY KEY,
+            editing_service TEXT
+        )
+    """)
     conn.commit()
     conn.close()
 
 init_db()
+
+# 📝 Load content dynamically with fallback to your defaults
+def get_content(service_key, default_text):
+    try:
+        conn = sqlite3.connect("new_join_filter_bot.db", timeout=20)
+        cursor = conn.cursor()
+        cursor.execute("SELECT text_content FROM dynamic_content WHERE service_key = ?", (service_key,))
+        row = cursor.fetchone()
+        conn.close()
+        if row and row[0]:
+            return row[0]
+    except Exception: pass
+    return default_text
+
+def set_content(service_key, new_text):
+    try:
+        conn = sqlite3.connect("new_join_filter_bot.db", timeout=20)
+        cursor = conn.cursor()
+        cursor.execute("INSERT OR REPLACE INTO dynamic_content VALUES (?, ?)", (service_key, new_text))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception:
+        return False
 
 def log_user_history(user_id, action_type, details):
     try:
@@ -79,7 +116,10 @@ def get_main_keyboard():
 
 def get_owner_menu():
     return {
-        "keyboard": [[{"text": "👥 View All Users (Admin Panel)"}]],
+        "keyboard": [
+            [{"text": "👥 View All Users (Admin Panel)"}],
+            [{"text": "✏️ Edit Bot Messages"}]
+        ],
         "resize_keyboard": True,
         "one_time_keyboard": False
     }
@@ -116,29 +156,64 @@ def handle_incoming_message(msg):
             conn.close()
         except Exception: pass
 
-        # 👑 Handle Admin Menu Keyboard Clicks
-        if from_user_id == OWNER_ID and text == "👥 View All Users (Admin Panel)":
+        # 👑 Admin Panels Menu Navigation
+        if from_user_id == OWNER_ID:
+            if text == "👥 View All Users (Admin Panel)":
+                conn = sqlite3.connect("new_join_filter_bot.db", timeout=20)
+                cursor = conn.cursor()
+                cursor.execute("SELECT user_id, first_name, username FROM users_profile ORDER BY join_date DESC LIMIT 30")
+                rows = cursor.fetchall()
+                conn.close()
+                
+                if not rows:
+                    requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": OWNER_ID, "text": "📭 No logged users found yet."})
+                    return
+                    
+                kb = {"inline_keyboard": []}
+                for u_id, f_name, u_name in rows:
+                    disp = f"{f_name} (@{u_name})" if u_name else f"{f_name}"
+                    kb["inline_keyboard"].append([{"text": f"👤 {disp}", "callback_data": f"adm_view_{u_id}"}])
+                
+                requests.post(f"{BASE_URL}/sendMessage", json={
+                    "chat_id": OWNER_ID, "text": "👥 **Select a user to view full log details & history chat box:**", "parse_mode": "Markdown", "reply_markup": kb
+                })
+                return
+
+            elif text == "✏️ Edit Bot Messages":
+                kb = {
+                    "inline_keyboard": [
+                        [{"text": "📝 Edit Account Management Rules", "callback_data": "edt_account"}],
+                        [{"text": "📝 Edit VIP Group Content", "callback_data": "edt_vip"}],
+                        [{"text": "📝 Edit Copy Trading Rules", "callback_data": "edt_copy"}],
+                        [{"text": "❌ Cancel Editing", "callback_data": "edt_cancel"}]
+                    ]
+                }
+                requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": OWNER_ID, "text": "🛠️ **Which service text content do you want to modify, Prince Bhai?**\n\nSelect an option below, then paste the new text completely.", "parse_mode": "Markdown", "reply_markup": kb})
+                return
+
+        # 👑 Handle Ongoing Editing Text Process for Admin
+        if from_user_id == OWNER_ID and text and not text.startswith("/"):
             conn = sqlite3.connect("new_join_filter_bot.db", timeout=20)
             cursor = conn.cursor()
-            cursor.execute("SELECT user_id, first_name, username FROM users_profile ORDER BY join_date DESC LIMIT 30")
-            rows = cursor.fetchall()
+            cursor.execute("SELECT editing_service FROM admin_edit_state WHERE admin_id = ?", (OWNER_ID,))
+            edit_row = cursor.fetchone()
             conn.close()
-            
-            if not rows:
-                requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": OWNER_ID, "text": "📭 No logged users found yet."})
-                return
-                
-            kb = {"inline_keyboard": []}
-            for u_id, f_name, u_name in rows:
-                disp = f"{f_name} (@{u_name})" if u_name else f"{f_name}"
-                kb["inline_keyboard"].append([{"text": f"👤 {disp}", "callback_data": f"adm_view_{u_id}"}])
-            
-            requests.post(f"{BASE_URL}/sendMessage", json={
-                "chat_id": OWNER_ID, "text": "👥 **Select a user to view full log details & history chat box:**", "parse_mode": "Markdown", "reply_markup": kb
-            })
-            return
 
-        # 👑 Admin Text Reply Routing to Users
+            if edit_row and edit_row[0]:
+                service_key = edit_row[0]
+                if set_content(service_key, text):
+                    # Reset state
+                    conn = sqlite3.connect("new_join_filter_bot.db", timeout=20)
+                    cursor = conn.cursor()
+                    cursor.execute("DELETE FROM admin_edit_state WHERE admin_id = ?", (OWNER_ID,))
+                    conn.commit()
+                    conn.close()
+                    requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": OWNER_ID, "text": f"✅ **Success!** Content for `{service_key}` has been live-updated in the database.", "parse_mode": "Markdown"})
+                else:
+                    requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": OWNER_ID, "text": "❌ Database error while updating text."})
+                return
+
+        # 👑 Admin Text Reply Routing to Users (CRM Mode)
         if from_user_id == OWNER_ID and text and not text.startswith("/"):
             conn = sqlite3.connect("new_join_filter_bot.db", timeout=20)
             cursor = conn.cursor()
@@ -183,7 +258,6 @@ def handle_incoming_message(msg):
         if text and from_user_id != OWNER_ID:
             log_user_history(from_user_id, "USER_MESSAGE", text)
             
-            # Check if user is submitting the login format
             if "Broker name" in text or "Login ID" in text or "Password" in text:
                 requests.post(f"{BASE_URL}/sendMessage", json={
                     "chat_id": chat_id, 
@@ -222,8 +296,8 @@ def handle_callback_query(callback):
     
     requests.post(f"{BASE_URL}/answerCallbackQuery", json={"callback_query_id": c_id})
     
-    # 📝 DATA POOL
-    account_management_text = (
+    # 📝 BASE STABLE DEFAULT TEXTS
+    def_account_text = (
         "Account Management Service – Terms & Rules\n\n"
         "Please read the following terms carefully before joining our Account Management Service.\n\n"
         "1. Trading Account\n"
@@ -247,7 +321,7 @@ def handle_callback_query(callback):
         "Thank you for choosing our Account Management Service. We look forward to building a successful and long-term partnership with you."
     )
     
-    vip_text = (
+    def_vip_text = (
         "Join Our VIP Premium Group\n\n"
         "If you ever miss our free signals or want more trading opportunities with higher consistency, you can join our VIP Premium Group.\n\n"
         "What You Get:\n"
@@ -269,7 +343,7 @@ def handle_callback_query(callback):
         "If you need more information or have any questions, feel free to contact us. Our support team will be happy to assist you."
     )
     
-    copy_trading_text = (
+    def_copy_text = (
         "📋 Copy Trading Terms & Conditions\n\n"
         "Gold Expert FX | Copy Trading Rules\n\n"
         "1. Account Requirement\n"
@@ -324,59 +398,4 @@ def handle_callback_query(callback):
         "💰 One-Time Payment: $1,000\n\n"
         "There are no monthly fees, no profit-sharing, and no hidden commissions. After paying the one-time fee, you can use our Copy Trading Service without any additional service charges.\n\n"
         "Risk & Refund Policy\n"
-        "We use professional risk management and always try to protect our clients' accounts. However, trading in financial markets always involves risk, and no one can guarantee that losses will never occur or that profits are guaranteed.\n\n"
-        "If you decide to cancel the Copy Trading Service, you may contact our support team.\n\n"
-        "According to our refund policy:\n"
-        "- We will deduct 30% as a service and administration fee.\n"
-        "- The remaining 70% of your one-time payment will be refunded to you.\n\n"
-        "Contact Us\n"
-        "If you have any questions or need more information, feel free to contact our support team. We will be happy to assist you with the registration and setup process."
-    )
-
-    if data == "srv_account":
-        log_user_history(from_user_id, "NAVIGATE", "Viewed Account Management Rules")
-        kb = {"inline_keyboard": [[{"text": "🚀 Join Service Now", "callback_data": "join_account"}]]}
-        requests.post(f"{BASE_URL}/editMessageText", json={"chat_id": chat_id, "message_id": message_id, "text": account_management_text, "reply_markup": kb})
-
-    elif data == "join_account":
-        log_user_history(from_user_id, "CLICK_BUTTON", "Clicked Join Account Management")
-        format_text = (
-            "1) Broker name -\n"
-            "2) Server name -\n"
-            "3) Platform - (MT4/MT5)\n"
-            "4) Deposit Amount - (Minimum $500)\n"
-            "5) Login ID -\n"
-            "6) Password -\n"
-            "7) Leverage - ( Minimum 1:500)\n"
-            "8) How you will send money?\n"
-            "   (Payment Methods - Skrill, Neteller, Web Money, Bitcoin, USDT, Perfect Money, Payeer, Indian Bank Transfer or UPI only)\n\n"
-            "📝 **Fill this format** and send it directly in this chat."
-        )
-        requests.post(f"{BASE_URL}/editMessageText", json={"chat_id": chat_id, "message_id": message_id, "text": format_text})
-
-    elif data == "srv_vip":
-        log_user_history(from_user_id, "NAVIGATE", "Viewed VIP Rules")
-        kb = {"inline_keyboard": [[{"text": "💎 Join VIP Premium", "callback_data": "join_vip_packages"}]]}
-        requests.post(f"{BASE_URL}/editMessageText", json={"chat_id": chat_id, "message_id": message_id, "text": vip_text, "reply_markup": kb})
-
-    elif data == "join_vip_packages":
-        log_user_history(from_user_id, "NAVIGATE", "Viewing VIP Packages Selection")
-        kb = {
-            "inline_keyboard": [
-                [{"text": "💎 Lifetime Access - $700", "callback_data": "pay_vip_pkg"}],
-                [{"text": "📅 1 Year Access - $500", "callback_data": "pay_vip_pkg"}],
-                [{"text": "📆 1 Month Access - $300", "callback_data": "pay_vip_pkg"}],
-                [{"text": "📈 1 Week Access - $100", "callback_data": "pay_vip_pkg"}]
-            ]
-        }
-        requests.post(f"{BASE_URL}/editMessageText", json={"chat_id": chat_id, "message_id": message_id, "text": "🎯 **Select Your VIP Membership Package:**", "reply_markup": kb})
-
-    elif data == "pay_vip_pkg":
-        log_user_history(from_user_id, "NAVIGATE", "Selecting VIP Payment Method")
-        kb = {
-            "inline_keyboard": [
-                [{"text": "🪙 Binance Pay / USDT", "callback_data": "vip_addr_wait"}],
-                [{"text": "💳 Skrill / Neteller / Perfect Money", "callback_data": "vip_addr_wait"}],
-                [{"text": "₿ Bitcoin (BTC) / Crypto", "callback_data": "vip_addr_wait"}]
-            ]
-  
+        "We use pr
