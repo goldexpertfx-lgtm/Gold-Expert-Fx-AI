@@ -4,6 +4,7 @@ import time
 import threading
 import re
 import sys
+import random
 
 # =====================================================================
 # ⚙️ CONFIGURATION 
@@ -20,11 +21,14 @@ if not API_TOKEN:
     sys.exit(1)
 
 BASE_URL = f"https://api.telegram.org/bot{API_TOKEN}"
+EMOJI_POOL = ["🔥", "🚀", "👍", "❤️", "⚡", "🎉", "🤩"]
 
 def init_db():
-    conn = sqlite3.connect("gold_expert_bot.db", timeout=20)
+    conn = sqlite3.connect("gold_expert_premium.db", timeout=20)
     cursor = conn.cursor()
-    # Table for all registered users
+    cursor.execute("CREATE TABLE IF NOT EXISTS member_activity (user_id INTEGER PRIMARY KEY, leave_timestamp REAL)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS pending_channel_requests (user_id INTEGER, chat_id INTEGER, request_time REAL, PRIMARY KEY (user_id, chat_id))")
+    
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users_profile (
             user_id INTEGER PRIMARY KEY,
@@ -33,23 +37,27 @@ def init_db():
             join_date REAL
         )
     """)
-    # Table for pending channel approval requests
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS pending_channel_requests (
-            user_id INTEGER, 
-            chat_id INTEGER, 
-            request_time REAL, 
-            PRIMARY KEY (user_id, chat_id)
+        CREATE TABLE IF NOT EXISTS user_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            action_type TEXT,
+            details TEXT,
+            timestamp REAL
         )
     """)
-    # Table for dynamic posts/messages editing
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS admin_state (
+            admin_id INTEGER PRIMARY KEY,
+            target_user_id INTEGER
+        )
+    """)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS dynamic_content (
             service_key TEXT PRIMARY KEY,
             text_content TEXT
         )
     """)
-    # Table for tracking which message owner is currently editing
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS admin_edit_state (
             admin_id INTEGER PRIMARY KEY,
@@ -61,10 +69,9 @@ def init_db():
 
 init_db()
 
-# --- Content Helpers ---
 def get_content(service_key, default_text):
     try:
-        conn = sqlite3.connect("gold_expert_bot.db", timeout=20)
+        conn = sqlite3.connect("gold_expert_premium.db", timeout=20)
         cursor = conn.cursor()
         cursor.execute("SELECT text_content FROM dynamic_content WHERE service_key = ?", (service_key,))
         row = cursor.fetchone()
@@ -75,7 +82,7 @@ def get_content(service_key, default_text):
 
 def set_content(service_key, new_text):
     try:
-        conn = sqlite3.connect("gold_expert_bot.db", timeout=20)
+        conn = sqlite3.connect("gold_expert_premium.db", timeout=20)
         cursor = conn.cursor()
         cursor.execute("INSERT OR REPLACE INTO dynamic_content VALUES (?, ?)", (service_key, new_text))
         conn.commit()
@@ -83,7 +90,16 @@ def set_content(service_key, new_text):
         return True
     except Exception: return False
 
-# --- Keyboards ---
+def log_user_history(user_id, action_type, details):
+    try:
+        conn = sqlite3.connect("gold_expert_premium.db", timeout=20)
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO user_history (user_id, action_type, details, timestamp) VALUES (?, ?, ?, ?)",
+                       (user_id, action_type, details, time.time()))
+        conn.commit()
+        conn.close()
+    except Exception: pass
+
 def get_main_keyboard():
     return {
         "inline_keyboard": [
@@ -102,7 +118,6 @@ def get_owner_menu():
         "one_time_keyboard": False
     }
 
-# --- Core Handlers ---
 def handle_incoming_message(msg):
     chat_id = msg.get("chat", {}).get("id")
     message_id = msg.get("message_id")
@@ -113,24 +128,30 @@ def handle_incoming_message(msg):
     
     if not from_user_id: return
 
-    # 1. System Logs & Auto-Clean Join/Leave messages
     if "new_chat_members" in msg or "left_chat_member" in msg:
         requests.post(f"{BASE_URL}/deleteMessage", json={"chat_id": chat_id, "message_id": message_id})
+        if chat_id == FREE_GROUP_ID and "left_chat_member" in msg:
+            left_id = msg["left_chat_member"]["id"]
+            log_user_history(left_id, "STATUS", "Left the Free Community Group")
+            try:
+                conn = sqlite3.connect("gold_expert_premium.db", timeout=20)
+                cursor = conn.cursor()
+                cursor.execute("INSERT OR REPLACE INTO member_activity VALUES (?, ?)", (left_id, time.time()))
+                conn.commit()
+                conn.close()
+            except Exception: pass
         return
 
-    # 2. Anti-Link Filter for Group (Only allow Owner/Forwards from own Channel)
     if text and chat_id == FREE_GROUP_ID and from_user_id != OWNER_ID:
-        url_pattern = r'(https?://[^\s]+|www\.[^\s]+|\bt\.me/[^\s]+|[a-zA-r0-9\-\.]+\.(com|net|org|xyz|info))'
+        url_pattern = r'(https?://[^\s]+|www\.[^\s]+|\bt\.me/[^\s]+|[a-zA-r0-9\-\.]+\.(com|net|org))'
         if re.search(url_pattern, text, re.IGNORECASE):
             if msg.get("forward_from_chat", {}).get("id") != PRIVATE_CHANNEL_ID:
                 requests.post(f"{BASE_URL}/deleteMessage", json={"chat_id": chat_id, "message_id": message_id})
                 return
 
-    # Private Chat Logic
     if chat_type == "private":
-        # Save user to DB automatically
         try:
-            conn = sqlite3.connect("gold_expert_bot.db", timeout=20)
+            conn = sqlite3.connect("gold_expert_premium.db", timeout=20)
             cursor = conn.cursor()
             cursor.execute("INSERT OR IGNORE INTO users_profile VALUES (?, ?, ?, ?)", 
                            (from_user_id, from_user.get("first_name"), from_user.get("username"), time.time()))
@@ -138,38 +159,34 @@ def handle_incoming_message(msg):
             conn.close()
         except Exception: pass
 
-        # Command /start handler
         if text and text.startswith("/start"):
-            welcome = f"👋 **Hello, {from_user.get('first_name', 'Trader')}!**\n\nWelcome to **Gold Expert FX Automation Hub**. Select a service below:"
+            log_user_history(from_user_id, "COMMAND", "/start target triggered")
+            welcome = f"👋 **Hello, {from_user.get('first_name', 'Trader')}!**\n\nWelcome to **Gold Expert FX Automation Hub**. Please select a service below:"
             payload = {"chat_id": chat_id, "text": welcome, "parse_mode": "Markdown", "reply_markup": get_main_keyboard()}
-            
             if from_user_id == OWNER_ID:
                 payload["reply_markup"] = get_owner_menu()
-                requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": chat_id, "text": "👑 Welcome Back Prince Bhai! Custom Owner buttons are active below.", "reply_markup": get_owner_menu()})
-            
+                requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": chat_id, "text": "👑 Welcome Prince Bhai. Custom Dashboard active.", "reply_markup": get_owner_menu()})
             requests.post(f"{BASE_URL}/sendMessage", json=payload)
             return
 
-        # Owner Special Keyboard Actions
         if from_user_id == OWNER_ID:
             if text == "👥 View Total Users":
-                try:
-                    conn = sqlite3.connect("gold_expert_bot.db", timeout=20)
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT COUNT(*) FROM users_profile")
-                    total_count = cursor.fetchone()[0]
-                    
-                    cursor.execute("SELECT first_name, username FROM users_profile ORDER BY join_date DESC LIMIT 15")
-                    latest_users = cursor.fetchall()
-                    conn.close()
-                    
-                    user_list_text = f"📊 **Total Active Users Database:** `{total_count}`\n\n**Latest Joined Users:**\n"
-                    for fname, uname in latest_users:
-                        user_list_text += f"👤 {fname} ({"@" + uname if uname else 'No Username'})\n"
-                        
-                    requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": OWNER_ID, "text": user_list_text, "parse_mode": "Markdown"})
-                except Exception as e:
-                    requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": OWNER_ID, "text": f"❌ Error fetching users: {str(e)}"})
+                conn = sqlite3.connect("gold_expert_premium.db", timeout=20)
+                cursor = conn.cursor()
+                cursor.execute("SELECT user_id, first_name, username FROM users_profile ORDER BY join_date DESC")
+                rows = cursor.fetchall()
+                conn.close()
+                
+                if not rows:
+                    requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": OWNER_ID, "text": "📭 Database contains zero logged users yet."})
+                    return
+                
+                kb = {"inline_keyboard": []}
+                for u_id, fn, un in rows:
+                    disp = f"{fn} (@{un})" if un else f"{fn}"
+                    kb["inline_keyboard"].append([{"text": f"👤 {disp} [ID: {u_id}]", "callback_data": f"adm_view_{u_id}"}])
+                
+                requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": OWNER_ID, "text": f"📊 **Total Active Users Registered:** `{len(rows)}` \n\nClick on any user below to open their operational chatbox history logs:", "parse_mode": "Markdown", "reply_markup": kb})
                 return
 
             elif text == "✏️ Live Edit Messages":
@@ -178,31 +195,50 @@ def handle_incoming_message(msg):
                         [{"text": "📝 Edit Account Management Text", "callback_data": "edt_account"}],
                         [{"text": "📝 Edit VIP Premium Text", "callback_data": "edt_vip"}],
                         [{"text": "📝 Edit Copy Trading Text", "callback_data": "edt_copy"}],
-                        [{"text": "❌ Cancel Editing", "callback_data": "edt_cancel"}]
+                        [{"text": "❌ Cancel", "callback_data": "edt_cancel"}]
                     ]
                 }
-                requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": OWNER_ID, "text": "🛠️ **Prince Bhai, kaunsa service post content change karna chahte ho?**\n\nNeeche se choose karein aur uske baad seedha naya format text bhej dein.", "parse_mode": "Markdown", "reply_markup": kb})
+                requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": OWNER_ID, "text": "🛠️ **Prince Bhai, select the post content you want to modify live:**", "reply_markup": kb})
                 return
 
-            # Check if Owner is currently submitting text updates
-            try:
-                conn = sqlite3.connect("gold_expert_bot.db", timeout=20)
-                cursor = conn.cursor()
-                cursor.execute("SELECT editing_service FROM admin_edit_state WHERE admin_id = ?", (OWNER_ID,))
-                edit_row = cursor.fetchone()
-                conn.close()
+            # Handle incoming edit texts or active chatbox replies
+            conn = sqlite3.connect("gold_expert_premium.db", timeout=20)
+            cursor = conn.cursor()
+            cursor.execute("SELECT editing_service FROM admin_edit_state WHERE admin_id = ?", (OWNER_ID,))
+            edit_row = cursor.fetchone()
+            
+            cursor.execute("SELECT target_user_id FROM admin_state WHERE admin_id = ?", (OWNER_ID,))
+            target_row = cursor.fetchone()
+            conn.close()
 
-                if edit_row and edit_row[0]:
-                    service_key = edit_row[0]
-                    if set_content(service_key, text):
-                        conn = sqlite3.connect("gold_expert_bot.db", timeout=20)
-                        cursor = conn.cursor()
-                        cursor.execute("DELETE FROM admin_edit_state WHERE admin_id = ?", (OWNER_ID,))
-                        conn.commit()
-                        conn.close()
-                        requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": OWNER_ID, "text": f"✅ **Live Update Successful!** New content saved for `{service_key}`.", "parse_mode": "Markdown"})
-                    return
-            except Exception: pass
+            if edit_row and edit_row[0]:
+                service_key = edit_row[0]
+                if set_content(service_key, text):
+                    conn = sqlite3.connect("gold_expert_premium.db", timeout=20)
+                    cursor = conn.cursor()
+                    cursor.execute("DELETE FROM admin_edit_state WHERE admin_id = ?", (OWNER_ID,))
+                    conn.commit()
+                    conn.close()
+                    requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": OWNER_ID, "text": f"✅ **Live Updated!** New text saved for `{service_key}` perfectly.", "parse_mode": "Markdown"})
+                return
+
+            elif target_row and not text.startswith("/"):
+                t_id = target_row[0]
+                payload = {"chat_id": t_id, "text": f"💬 **Message from Admin (Prince Bhai):**\n\n{text}", "parse_mode": "Markdown"}
+                res = requests.post(f"{BASE_URL}/sendMessage", json=payload).json()
+                if res.get("ok"):
+                    requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": OWNER_ID, "text": "🚀 Reply dispatched cleanly to client chat field."})
+                else:
+                    requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": OWNER_ID, "text": "❌ Delivery failed. User might have blocked the bot."})
+                return
+
+        if from_user_id != OWNER_ID:
+            log_user_history(from_user_id, "USER_MESSAGE", text)
+            if "Broker name" in text or "Login ID" in text or "Password" in text:
+                requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": chat_id, "text": "⏳ **Format Received Successfully!**\n\nPlease wait while our team reviews your trading details and initializes your connection. We will notify you here directly.", "parse_mode": "Markdown"})
+            
+            admin_alert = f"📥 **New Chat Box Message!**\n👤 **From:** {from_user.get('first_name')} [ID: `{from_user_id}`]\n💬 **Text:** {text}\n\n👉 Click 'View Total Users' to open this chat logs history and reply."
+            requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": OWNER_ID, "text": admin_alert, "parse_mode": "Markdown"})
 
 def handle_callback_query(callback):
     c_id = callback["id"]
@@ -213,90 +249,164 @@ def handle_callback_query(callback):
     
     requests.post(f"{BASE_URL}/answerCallbackQuery", json={"callback_query_id": c_id})
 
-    # Default Texts if DB is empty
-    def_account = "💼 **Account Management Rules:**\n\n1. Profit split: 50/50.\n2. Minimum Account Size: $500.\n3. Safe and fully transparent execution."
-    def_vip = "👑 **VIP Premium Channel:**\n\n- Daily 5-7 High Accuracy Gold Setups.\n- Entry, Stop Loss & Target targets detailed perfectly."
-    def_copy = "📋 **Copy Trading Service:**\n\n- One-time setup.\n- Fully automated system directly connecting your broker account."
+    # Massive Restored Formats
+    def_account_text = """Account Management Service – Terms & Rules
 
-    # Live Edit Router (Owner Only)
+Please read the following terms carefully before joining our Account Management Service.
+
+1. Trading Account
+You will provide your MT4 or MT5 login details so we can manage your trading account professionally.
+
+2. Fund Security
+Your funds always remain in your own trading account. We cannot deposit, withdraw, or transfer your money. Only you have full control over your funds.
+
+3. Profit Sharing
+All trading profits will be shared 50% for you and 50% for us.
+
+4. Loss Sharing
+If a trading loss occurs, the loss will also be shared 50/50. Since we receive 50% of the profit, we also accept 50% of the trading loss.
+
+5. Profit Payment
+After profit is generated, we will notify you. You can then send our 50% profit share using any of the payment methods listed below.
+
+6. No Scam
+This is a transparent and honest service. There are no hidden charges, no scams, and no fake promises.
+
+7. No Long-Term Commitment
+You are free to start or stop the service at any time. There is no pressure or obligation to continue working with us.
+
+Accepted Brokers
+✅ All Brokers Accepted
+
+Accepted Payment Methods
+- Binance / USDT
+- Skrill / Neteller
+- Bitcoin (BTC) / Crypto
+- Perfect Money / WebMoney
+
+Thank you for choosing our Account Management Service."""
+
+    def_vip_text = """Join Our VIP Premium Group
+
+If you ever miss our free signals or want more trading opportunities with higher consistency, you can join our VIP Premium Group.
+
+What You Get:
+- ✅ 5–7 XAUUSD signals daily
+- ✅ High-accuracy trade setups
+- ✅ Point-by-point trade updates
+- ✅ Entry, Take Profit & Stop Loss levels
+- ✅ Market analysis & chart analysis
+
+VIP Membership Packages
+- 💎 Lifetime Access: $700 (One-Time Payment)
+- 📅 1 Year: $500
+- 📆 1 Month: $300
+- 📈 1 Week: $100
+
+You can judge our trading accuracy by following our Free Signals Channel before upgrading."""
+
+    def_copy_text = """📋 Copy Trading Terms & Conditions
+
+Gold Expert FX | Copy Trading Rules
+
+1. Account Requirement
+- Client ke paas MT4 ya MT5 trading account hona chahiye.
+- Recommended minimum deposit: $200 ya us se zyada.
+
+2. No Deposit Withdrawal
+- Hum kabhi bhi client ke account se funds withdraw nahi kar sakte. Only you hold structural access.
+
+Copy Trading Fee
+💰 One-Time Payment: $1,000
+
+There are no monthly fees, no profit-sharing, and no hidden commissions. After paying the one-time fee, you can use our Copy Trading Service without any additional service charges."""
+
+    # Dynamic Owner Interface Redirection Override
     if data.startswith("edt_") and from_user_id == OWNER_ID:
         action = data.split("_")[1]
         if action == "cancel":
-            conn = sqlite3.connect("gold_expert_bot.db", timeout=20)
+            conn = sqlite3.connect("gold_expert_premium.db", timeout=20)
             cursor = conn.cursor()
             cursor.execute("DELETE FROM admin_edit_state WHERE admin_id = ?", (OWNER_ID,))
             conn.commit()
             conn.close()
-            requests.post(f"{BASE_URL}/editMessageText", json={"chat_id": chat_id, "message_id": message_id, "text": "❌ Editing sequence cancelled safely."})
+            requests.post(f"{BASE_URL}/editMessageText", json={"chat_id": chat_id, "message_id": message_id, "text": "❌ Sequence cancelled smoothly."})
             return
         
-        conn = sqlite3.connect("gold_expert_bot.db", timeout=20)
+        conn = sqlite3.connect("gold_expert_premium.db", timeout=20)
         cursor = conn.cursor()
         cursor.execute("INSERT OR REPLACE INTO admin_edit_state VALUES (?, ?)", (OWNER_ID, action))
         conn.commit()
         conn.close()
-        requests.post(f"{BASE_URL}/editMessageText", json={"chat_id": chat_id, "message_id": message_id, "text": f"📥 **System Ready!**\n\nAb aap jo bhi text message yahan type karke bhejenge, woh live update ho jayega `{action}` post par.", "parse_mode": "Markdown"})
+        requests.post(f"{BASE_URL}/editMessageText", json={"chat_id": chat_id, "message_id": message_id, "text": f"📥 **System Ready!**\n\nSend the new raw string message now to overwrite `{action}` completely down in the server database.", "parse_mode": "Markdown"})
         return
 
-    # Navigation Services for Users
+    # Advanced Operational CRM Tracking Actions
+    if data.startswith("adm_view_") and from_user_id == OWNER_ID:
+        t_uid = int(data.split("_")[2])
+        conn = sqlite3.connect("gold_expert_premium.db", timeout=20)
+        cursor = conn.cursor()
+        cursor.execute("SELECT first_name, username FROM users_profile WHERE user_id = ?", (t_uid,))
+        prof = cursor.fetchone()
+        cursor.execute("SELECT action_type, details, timestamp FROM user_history WHERE user_id = ? ORDER BY timestamp DESC LIMIT 20", (t_uid,))
+        logs = cursor.fetchall()
+        cursor.execute("INSERT OR REPLACE INTO admin_state VALUES (?, ?)", (OWNER_ID, t_uid))
+        conn.commit()
+        conn.close()
+        
+        if not prof: return
+        history_text = f"⚙️ **User Chatbox & Historical Activity Logs:**\n👤 **Name:** {prof[0]}\n🆔 **ID:** `{t_uid}`\n🌐 **User:** @{prof[1] if prof[1] else 'None'}\n\n📝 **Timeline Tracking Trace:**\n"
+        if not logs:
+            history_text += "_No previous footprints logged for this user profile._"
+        else:
+            for atype, det, ts in logs:
+                tm = time.strftime('%d-%m %H:%M', time.localtime(ts))
+                history_text += f"▪️ `[{tm}]` **{atype}**: {det}\n"
+        
+        history_text += "\n💬 **Direct Reply System:**\nType your normal message text here in this chat box interface and hit send. The engine will instantly mirror it to the user's private bot screen!"
+        requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": OWNER_ID, "text": history_text, "parse_mode": "Markdown"})
+        return
+
+    # User Navigation Interface Flows
     if data == "srv_account":
-        current_text = get_content("account", def_account)
-        requests.post(f"{BASE_URL}/editMessageText", json={"chat_id": chat_id, "message_id": message_id, "text": current_text, "parse_mode": "Markdown", "reply_markup": get_main_keyboard()})
+        log_user_history(from_user_id, "NAVIGATE", "Looked up Account Management Details")
+        txt = get_content("account", def_account_text)
+        kb = {"inline_keyboard": [[{"text": "🚀 Join Service Now", "callback_data": "join_account"}]]}
+        if from_user_id == OWNER_ID: kb["inline_keyboard"].append([{"text": "⚡ Direct Edit Post Content", "callback_data": "edt_account"}])
+        requests.post(f"{BASE_URL}/editMessageText", json={"chat_id": chat_id, "message_id": message_id, "text": txt, "parse_mode": "Markdown", "reply_markup": kb})
+
+    elif data == "join_account":
+        log_user_history(from_user_id, "CLICK", "Requested Account Management Application Form")
+        fmt = "1) Broker name -\n2) Server name -\n3) Platform - (MT4/MT5)\n4) Deposit Amount - (Minimum $500)\n5) Login ID -\n6) Password -\n7) Leverage - ( Minimum 1:500)\n8) How you will send money?\n\n📝 **Fill this format and send it directly here in the chat.**"
+        requests.post(f"{BASE_URL}/editMessageText", json={"chat_id": chat_id, "message_id": message_id, "text": fmt, "parse_mode": "Markdown"})
+
     elif data == "srv_vip":
-        current_text = get_content("vip", def_vip)
-        requests.post(f"{BASE_URL}/editMessageText", json={"chat_id": chat_id, "message_id": message_id, "text": current_text, "parse_mode": "Markdown", "reply_markup": get_main_keyboard()})
+        log_user_history(from_user_id, "NAVIGATE", "Viewed VIP Packages Structure")
+        txt = get_content("vip", def_vip_text)
+        kb = {"inline_keyboard": [[{"text": "💎 Join VIP Premium", "callback_data": "join_vip_packages"}]]}
+        if from_user_id == OWNER_ID: kb["inline_keyboard"].append([{"text": "⚡ Direct Edit Post Content", "callback_data": "edt_vip"}])
+        requests.post(f"{BASE_URL}/editMessageText", json={"chat_id": chat_id, "message_id": message_id, "text": txt, "parse_mode": "Markdown", "reply_markup": kb})
+
+    elif data == "join_vip_packages":
+        kb = {
+            "inline_keyboard": [
+                [{"text": "💎 Lifetime Access - $700", "callback_data": "pay_wait"}],
+                [{"text": "📅 1 Year Access - $500", "callback_data": "pay_wait"}],
+                [{"text": "📆 1 Month Access - $300", "callback_data": "pay_wait"}]
+            ]
+        }
+        requests.post(f"{BASE_URL}/editMessageText", json={"chat_id": chat_id, "message_id": message_id, "text": "🎯 **Select Your Desired Membership package tier:**", "reply_markup": kb})
+
     elif data == "srv_copy":
-        current_text = get_content("copy", def_copy)
-        requests.post(f"{BASE_URL}/editMessageText", json={"chat_id": chat_id, "message_id": message_id, "text": current_text, "parse_mode": "Markdown", "reply_markup": get_main_keyboard()})
+        log_user_history(from_user_id, "NAVIGATE", "Opened Copy Trading Terms Summary")
+        txt = get_content("copy", def_copy_text)
+        kb = {"inline_keyboard": [[{"text": "📋 Connect Copy Trading Service", "callback_data": "pay_wait"}]]}
+        if from_user_id == OWNER_ID: kb["inline_keyboard"].append([{"text": "⚡ Direct Edit Post Content", "callback_data": "edt_copy"}])
+        requests.post(f"{BASE_URL}/editMessageText", json={"chat_id": chat_id, "message_id": message_id, "text": txt, "parse_mode": "Markdown", "reply_markup": kb})
 
-# --- Automatic Join Request Process Thread ---
-def automatic_join_processor():
+    elif data == "pay_wait":
+        log_user_history(from_user_id, "ACTION", "Selected Payment Setup Execution Flow")
+        requests.post(f"{BASE_URL}/editMessageText", json={"chat_id": chat_id, "message_id": message_id, "text": "⏳ **Please wait...** our team is compiling your exclusive secure transaction parameters. Standby instructions will follow shortly here."})
+
+def auto_request_approver():
     while True:
-        try:
-            conn = sqlite3.connect("gold_expert_bot.db", timeout=20)
-            cursor = conn.cursor()
-            cursor.execute("SELECT user_id, chat_id FROM pending_channel_requests")
-            pending_requests = cursor.fetchall()
-            conn.close()
-
-            for user_id, chat_id in pending_requests:
-                # Instantly approve requests 
-                approve_status = requests.post(f"{BASE_URL}/approveChatJoinRequest", json={"chat_id": chat_id, "user_id": user_id}).json()
-                
-                if approve_status.get("ok"):
-                    conn = sqlite3.connect("gold_expert_bot.db", timeout=20)
-                    cursor = conn.cursor()
-                    cursor.execute("DELETE FROM pending_channel_requests WHERE user_id = ? AND chat_id = ?", (user_id, chat_id))
-                    conn.commit()
-                    conn.close()
-        except Exception: pass
-        time.sleep(5)
-
-if __name__ == "__main__":
-    threading.Thread(target=automatic_join_processor, daemon=True).start()
-    print("🚀 Tailored Premium Engine Active & Safe...")
-    offset = 0
-    while True:
-        try:
-            response = requests.post(f"{BASE_URL}/getUpdates", json={"offset": offset, "timeout": 10, "allowed_updates": ["message", "callback_query", "chat_join_request"]}, timeout=15).json()
-            if response.get("ok"):
-                for update in response["result"]:
-                    offset = update["update_id"] + 1
-                    
-                    if "chat_join_request" in update:
-                        req = update["chat_join_request"]
-                        conn = sqlite3.connect("gold_expert_bot.db", timeout=20)
-                        cursor = conn.cursor()
-                        cursor.execute("INSERT OR IGNORE INTO pending_channel_requests VALUES (?, ?, ?)", (req["from"]["id"], req["chat"]["id"], time.time()))
-                        conn.commit()
-                        conn.close()
-                        
-                    elif "message" in update:
-                        handle_incoming_message(update["message"])
-                        
-                    elif "callback_query" in update:
-                        handle_callback_query(update["callback_query"])
-            else:
-                if response.get("error_code") == 409: time.sleep(10)
-        except Exception: time.sleep(4)
-    
