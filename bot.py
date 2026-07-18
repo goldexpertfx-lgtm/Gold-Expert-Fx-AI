@@ -322,8 +322,7 @@ def handle_callback_query(callback):
         "- Hum kabhi bhi client ke account se funds withdraw nahi kar sakte.\n"
         "- Funds par sirf account owner ka control hota hai.\n\n"
         "7. VPS & Internet\n"
-        "- Copy Trading ko smoothly chalane ke liye stable internet ya VPS use karna recommended hai.\n\n"
-        "8. Account Changes\n"
+        "- Copy Trading ko smoothly chalane ke liye stable internet ya VPS use karna recommended hai.\n"
         "- Client bina inform kiye leverage, password, ya account settings change na kare.\n"
         "- Agar changes kiye gaye to service temporarily stop ki ja sakti hai.\n\n"
         "9. Responsibility\n"
@@ -376,12 +375,8 @@ def handle_callback_query(callback):
 
     elif data == "join_account":
         log_user_history(from_user_id, "CLICK_BUTTON", "Clicked Join Account Management")
-        format_text = (
-            "1) Broker name -\n"
-            "2) Server name -\n"
-            "3) Platform - (MT4/MT5)\n"
-            "4) Deposit Amount - (Minimum $500)\n"
-            "5) Login ID -\n"
-            "6) Password -\n"
-            "7) Leverage - ( Minimum 1:500)\n"
-            "8) How you will send money? (Methods: Binan
+        
+        # 🛡️ Chunked Concatenation to explicitly bypass any terminal truncation bugs
+        p1 = "1) Broker name -\n2) Server name -\n3) Platform - (MT4/MT5)\n4) Deposit Amount - (Minimum $500)\n"
+        p2 = "5) Login ID -\n6) Password -\n7) Leverage - ( Minimum 1:500)\n"
+        p3 = "8) How you will send money? (Methods: Binance, Skrill, Neteller, Web Money, C
