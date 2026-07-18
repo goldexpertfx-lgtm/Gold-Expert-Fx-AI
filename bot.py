@@ -1,246 +1,380 @@
-import requests, sqlite3, time, threading, re, sys
-from datetime import datetime
+import requests
+import sqlite3
+import time
+import threading
+import re
+import sys
+import random
 
-API_TOKEN = "8851943854:AAGfy9xw9srlQCE5g_yH0hMYqjPsI5NC-e4"  # ⚠️ Yahan apna Real Token daalein
-OWNER_ID = 7415265825  # 👑 Admin ID (Prince Bhai)
+# =====================================================================
+# ⚙️ CONFIGURATION 
+# =====================================================================
+API_TOKEN = "8851943854:AAGfy9xw9srlQCE5g_yH0hMYqjPsI5NC-e4"  # ⚠️ Apne bot ka real Telegram Token yahan dalein
+OWNER_ID = 7415265825  # 👑 Prince Bhai Admin ID Locked
 
-FREE_GROUP_ID = -4477244119  
-PRIVATE_CHANNEL_ID = -3870933647  
-DB_NAME = "gold_expert_ultimate.db"
+FREE_GROUP_ID = -4477244119  # Gold Expert Fx Community
+PRIVATE_CHANNEL_ID = -3870933647  # Gold Expert FX | XAUUSD Signals
+# =====================================================================
 
-if not API_TOKEN: sys.exit(1)
+if not API_TOKEN:
+    print("❌ ERROR: API_TOKEN khali hai!")
+    sys.exit(1)
+
 BASE_URL = f"https://api.telegram.org/bot{API_TOKEN}"
-
-# --- DATABASE LAYER ---
-def db_run(query, params=(), fetch=False, multi=False):
-    try:
-        with sqlite3.connect(DB_NAME, timeout=30) as conn:
-            c = conn.cursor(); c.execute(query, params)
-            if fetch: return c.fetchall() if multi else c.fetchone()
-            conn.commit()
-    except Exception as e:
-        return None
+EMOJI_POOL = ["🔥", "🚀", "👍", "❤️", "⚡", "🎉", "🤩"]
 
 def init_db():
-    db_run("CREATE TABLE IF NOT EXISTS pending_channel_requests (user_id INTEGER, chat_id INTEGER, request_time REAL, PRIMARY KEY (user_id, chat_id))")
-    db_run("CREATE TABLE IF NOT EXISTS users_profile (user_id INTEGER PRIMARY KEY, first_name TEXT, username TEXT, join_date REAL)")
-    db_run("CREATE TABLE IF NOT EXISTS dynamic_content (service_key TEXT PRIMARY KEY, text_content TEXT)")
-    db_run("CREATE TABLE IF NOT EXISTS admin_state (admin_id INTEGER PRIMARY KEY, mode TEXT, target_id TEXT)")
-    db_run("CREATE TABLE IF NOT EXISTS schedules (id INTEGER PRIMARY KEY AUTOINCREMENT, post_text TEXT, run_time TEXT, is_active INTEGER DEFAULT 1)")
+    conn = sqlite3.connect("new_join_filter_bot.db", timeout=20)
+    cursor = conn.cursor()
+    cursor.execute("CREATE TABLE IF NOT EXISTS member_activity (user_id INTEGER PRIMARY KEY, leave_timestamp REAL)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS pending_channel_requests (user_id INTEGER, chat_id INTEGER, request_time REAL, PRIMARY KEY (user_id, chat_id))")
+    
+    # 📌 Leave Tracking Tables for cross-checking
+    cursor.execute("CREATE TABLE IF NOT EXISTS group_leaves (user_id INTEGER PRIMARY KEY, timestamp REAL)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS channel_leaves (user_id INTEGER PRIMARY KEY, timestamp REAL)")
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users_profile (
+            user_id INTEGER PRIMARY KEY,
+            first_name TEXT,
+            username TEXT,
+            join_date REAL
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            action_type TEXT,
+            details TEXT,
+            timestamp REAL
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS admin_state (
+            admin_id INTEGER PRIMARY KEY,
+            target_user_id INTEGER
+        )
+    """)
+    conn.commit()
+    conn.close()
 
 init_db()
 
-def get_content(k, d):
-    r = db_run("SELECT text_content FROM dynamic_content WHERE service_key = ?", (k,), fetch=True)
-    return r[0] if r and r[0] else d
+def log_user_history(user_id, action_type, details):
+    try:
+        conn = sqlite3.connect("new_join_filter_bot.db", timeout=20)
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO user_history (user_id, action_type, details, timestamp) VALUES (?, ?, ?, ?)",
+                       (user_id, action_type, details, time.time()))
+        conn.commit()
+        conn.close()
+    except Exception: pass
 
+# 🧱 Keyboards Setup
 def get_main_keyboard():
-    return {"inline_keyboard": [
-        [{"text": "💼 Account Management Services", "callback_data": "srv_account"}],
-        [{"text": "👑 VIP Premium Private Channel", "callback_data": "srv_vip"}],
-        [{"text": "📋 Copy Trading Service", "callback_data": "srv_copy"}]
-    ]}
+    return {
+        "inline_keyboard": [
+            [{"text": "💼 Account Management Services", "callback_data": "srv_account"}],
+            [{"text": "👑 VIP Premium Private Channel", "callback_data": "srv_vip"}],
+            [{"text": "📋 Copy Trading Service", "callback_data": "srv_copy"}]
+        ]
+    }
 
-# --- LIVE LOGGER TO OWNER ---
-def send_live_log_to_owner(user_info, action_details):
-    tag = f"@{user_info.get('username')}" if user_info.get('username') else "No Username"
-    log_msg = (
-        "📩 **New Activity Log**\n\n"
-        "👤 **From:** {name}\n"
-        "🔗 ({username_tag})\n"
-        "🆔 **ID:** `{uid}`\n\n"
-        "⚡ **Action:** {action}"
-    ).format(
-        name=user_info.get('first_name', 'Trader'),
-        username_tag=tag,
-        uid=user_info.get('id'),
-        action=action_details
-    )
-    requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": OWNER_ID, "text": log_msg, "parse_mode": "Markdown"})
+def get_owner_menu():
+    return {
+        "keyboard": [[{"text": "👥 View All Users (Admin Panel)"}]],
+        "resize_keyboard": True,
+        "one_time_keyboard": False
+    }
 
-# --- INCOMING MESSAGE HANDLER ---
+# 🔍 Cross-Check double leaves and ping user
+def verify_and_ping_double_leave(user_id):
+    try:
+        conn = sqlite3.connect("new_join_filter_bot.db", timeout=20)
+        cursor = conn.cursor()
+        cursor.execute("SELECT timestamp FROM group_leaves WHERE user_id = ?", (user_id,))
+        g_row = cursor.fetchone()
+        cursor.execute("SELECT timestamp FROM channel_leaves WHERE user_id = ?", (user_id,))
+        c_row = cursor.fetchone()
+        conn.close()
+
+        if g_row and c_row:
+            # User has left both platforms! Send inquiry text
+            leave_msg = (
+                "👋 Hello, Trader!\n\n"
+                "We noticed that you have left both our **Gold Expert Fx Community** and **VIP Premium Signals Channel**.\n\n"
+                "Could you please share your feedback with us? If there was any issue with the signals, community rules, "
+                "or if you need any specific customization, please let us know directly here so we can improve our services for you. Thank you!"
+            )
+            requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": user_id, "text": leave_msg, "parse_mode": "Markdown"})
+            log_user_history(user_id, "LEAVE_FEEDBACK_SENT", "Sent double leave inquiry to user inbox")
+            
+            # Clean records so it doesn't spam
+            conn = sqlite3.connect("new_join_filter_bot.db", timeout=20)
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM group_leaves WHERE user_id = ?", (user_id,))
+            cursor.execute("DELETE FROM channel_leaves WHERE user_id = ?", (user_id,))
+            conn.commit()
+            conn.close()
+    except Exception: pass
+
+# 🛡️ Main Message & Event Handler
 def handle_incoming_message(msg):
     chat_id = msg.get("chat", {}).get("id")
     message_id = msg.get("message_id")
     text = msg.get("text", "")
-    f_user = msg.get("from", {})
-    uid = f_user.get("id")
+    from_user = msg.get("from", {})
+    from_user_id = from_user.get("id")
+    chat_type = msg.get("chat", {}).get("type")
     
-    if not uid: return
+    # 🚫 Handle System Cleanups (Joins/Leaves message deletion)
+    if "new_chat_members" in msg or "left_chat_member" in msg:
+        requests.post(f"{BASE_URL}/deleteMessage", json={"chat_id": chat_id, "message_id": message_id})
+        
+        # Track Group Leave specifically
+        if chat_id == FREE_GROUP_ID and "left_chat_member" in msg:
+            left_user_id = msg["left_chat_member"]["id"]
+            try:
+                conn = sqlite3.connect("new_join_filter_bot.db", timeout=20)
+                cursor = conn.cursor()
+                cursor.execute("INSERT OR REPLACE INTO member_activity VALUES (?, ?)", (left_user_id, time.time()))
+                cursor.execute("INSERT OR REPLACE INTO group_leaves VALUES (?, ?)", (left_user_id, time.time()))
+                conn.commit()
+                conn.close()
+                threading.Thread(target=verify_and_ping_double_leave, args=(left_user_id,), daemon=True).start()
+            except Exception: pass
+        return
 
-    # 🛡️ Link Cleaner & System Logs Cleaner (Only inside Community Group)
-    if chat_id == FREE_GROUP_ID:
-        if "new_chat_members" in msg or "left_chat_member" in msg:
-            requests.post(f"{BASE_URL}/deleteMessage", json={"chat_id": chat_id, "message_id": message_id})
-            return
-        if text and uid != OWNER_ID:
-            if re.search(r'(https?://[^\s]+|www\.[^\s]+|\bt\.me/[^\s]+|[a-zA-r0-9\-\.]+\.(com|net|org|xyz|info|co|biz))', text, re.I):
+    # 🌐 LINK DELETION ENGINE (Community Group Safety)
+    if text and chat_id == FREE_GROUP_ID:
+        url_pattern = r'(https?://[^\s]+|www\.[^\s]+|\bt\.me/[^\s]+|[a-zA-r0-9\-\.]+\.(com|net|org|xyz|info|co))'
+        if re.search(url_pattern, text, re.IGNORECASE):
+            if not (msg.get("forward_from_chat", {}).get("id") == PRIVATE_CHANNEL_ID or from_user_id == OWNER_ID):
                 requests.post(f"{BASE_URL}/deleteMessage", json={"chat_id": chat_id, "message_id": message_id})
                 return
 
-    # Private Chat Actions
-    if msg.get("chat", {}).get("type") == "private":
-        db_run("INSERT OR IGNORE INTO users_profile VALUES (?, ?, ?, ?)", (uid, f_user.get("first_name"), f_user.get("username"), time.time()))
+    # 📥 PRIVATE CHAT FLOW
+    if chat_type == "private":
+        try:
+            conn = sqlite3.connect("new_join_filter_bot.db", timeout=20)
+            cursor = conn.cursor()
+            cursor.execute("INSERT OR IGNORE INTO users_profile VALUES (?, ?, ?, ?)", 
+                           (from_user_id, from_user.get("first_name"), from_user.get("username"), time.time()))
+            conn.commit()
+            conn.close()
+        except Exception: pass
 
-        if uid == OWNER_ID:
-            state = db_run("SELECT mode, target_id FROM admin_state WHERE admin_id = ?", (OWNER_ID,), fetch=True)
+        # 👑 Handle Admin Keyboard Click (View Users List)
+        if from_user_id == OWNER_ID and text == "👥 View All Users (Admin Panel)":
+            conn = sqlite3.connect("new_join_filter_bot.db", timeout=20)
+            cursor = conn.cursor()
+            cursor.execute("SELECT user_id, first_name, username FROM users_profile ORDER BY join_date DESC LIMIT 30")
+            rows = cursor.fetchall()
+            conn.close()
             
-            if state and state[0] == "EDITING":
-                target_key = state[1]
-                db_run("INSERT OR REPLACE INTO dynamic_content (service_key, text_content) VALUES (?, ?)", (target_key, text))
-                db_run("DELETE FROM admin_state WHERE admin_id = ?", (OWNER_ID,))
-                requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": OWNER_ID, "text": f"✅ **Saved Perfectly:** `{target_key}` configuration database updated live!"})
+            if not rows:
+                requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": OWNER_ID, "text": "📭 No logged users found yet."})
                 return
-
-            if state and state[0] == "REPLYING":
-                target_user = state[1]
-                requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": target_user, "text": f"📩 **Message From Admin:**\n\n{text}"})
-                db_run("DELETE FROM admin_state WHERE admin_id = ?", (OWNER_ID,))
-                requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": OWNER_ID, "text": "✅ Reply sent successfully to user inbox."})
-                return
-
-            if text and text.startswith("/schedule"):
-                try:
-                    parts = text.split(" ", 2)
-                    db_run("INSERT INTO schedules (post_text, run_time, is_active) VALUES (?, ?, 1)", (parts[2], parts[1]))
-                    requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": OWNER_ID, "text": f"📅 **Scheduled:** Post will go live at `{parts[1]}` (Mon-Fri Filter)."})
-                except: 
-                    requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": OWNER_ID, "text": "❌ **Format:** `/schedule HH:MM Your Message`"})
-                return
-
-            if text == "/start":
-                requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": OWNER_ID, "text": "👑 **Welcome Prince Bhai.** Master System Ready.", "reply_markup": {"keyboard": [[{"text": "👥 View Total Users"}, {"text": "✏️ Live Edit Messages"}]], "resize_keyboard": True}})
-                return
-
-            if text == "👥 View Total Users":
-                rows = db_run("SELECT user_id, first_name, username FROM users_profile", fetch=True, multi=True)
-                if not rows:
-                    requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": OWNER_ID, "text": "📭 No active users found."})
-                    return
-                requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": OWNER_ID, "text": f"📊 **Total Database Users:** `{len(rows)}`"})
-                for r in rows:
-                    tag = f"(@{r[2]})" if r[2] else ""
-                    kb = {"inline_keyboard": [[{"text": f"💬 Chat with {r[1]}", "callback_data": f"chat_usr_{r[0]}"}]]}
-                    requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": OWNER_ID, "text": f"👤 {r[1]} {tag}\n🆔 `{r[0]}`", "reply_markup": kb})
-                return
-
-            if text == "✏️ Live Edit Messages":
-                kb = {"inline_keyboard": [
-                    [{"text": "📝 Edit Account Mgmt Terms", "callback_data": "edt_account"}],
-                    [{"text": "📝 Edit Account Form", "callback_data": "edt_form_account"}],
-                    [{"text": "📝 Edit VIP Main Text", "callback_data": "edt_vip"}],
-                    [{"text": "📝 Edit VIP Form Details", "callback_data": "edt_form_vip"}],
-                    [{"text": "📝 Edit Copy Trading Info", "callback_data": "edt_copy"}]
-                ]}
-                requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": OWNER_ID, "text": "🛠️ **Select section to update dynamic content live:**", "reply_markup": kb})
-                return
-
-        # User side tracking execution logs
-        if text == "/start":
-            send_live_log_to_owner(f_user, "Started the Bot (`/start`)")
-            w_msg = f"👋 **Hello, {f_user.get('first_name', 'Trader')}!**\n\nWelcome to **Gold Expert FX Hub**. Select our services below:"
-            requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": chat_id, "text": w_msg, "parse_mode": "Markdown", "reply_markup": get_main_keyboard()})
-            return
-
-        # If user inputs form answers or plain messages, notify owner instantly
-        if uid != OWNER_ID:
-            send_live_log_to_owner(f_user, f"Sent Message/Form Data:\n`{text}`")
-
-# --- CALLBACK ROUTER SYSTEM ---
-def handle_callback_query(cb):
-    uid = cb["from"]["id"]; chat_id = cb["message"]["chat"]["id"]
-    msg_id = cb["message"]["message_id"]; data = cb["data"]; f_user = cb["from"]
-    requests.post(f"{BASE_URL}/answerCallbackQuery", json={"callback_query_id": cb["id"]})
-
-    # Admin Callback Actions
-    if uid == OWNER_ID:
-        if data.startswith("edt_"):
-            clean_key = data.replace("edt_", "")
-            db_run("INSERT OR REPLACE INTO admin_state VALUES (?, ?, ?)", (OWNER_ID, "EDITING", clean_key))
-            requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": OWNER_ID, "text": f"📥 **Editing Mode Active for:** `{clean_key}`\n\nPaste/Send the new layout message content now:"})
-            return
+                
+            kb = {"inline_keyboard": []}
+            for u_id, f_name, u_name in rows:
+                disp = f"{f_name} (@{u_name})" if u_name else f"{f_name}"
+                kb["inline_keyboard"].append([{"text": f"👤 {disp}", "callback_data": f"adm_view_{u_id}"}])
             
-        if data.startswith("chat_usr_"):
-            target_id = data.replace("chat_usr_", "")
-            db_run("INSERT OR REPLACE INTO admin_state VALUES (?, ?, ?)", (OWNER_ID, "REPLYING", target_id))
-            requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": OWNER_ID, "text": f"⌨️ **Direct Chat Active with ID:** `{target_id}`\n\nType your reply below and hit send:"})
+            requests.post(f"{BASE_URL}/sendMessage", json={
+                "chat_id": OWNER_ID, "text": "👥 **Select a user to view full log details & open direct chat box:**", "parse_mode": "Markdown", "reply_markup": kb
+            })
             return
 
-    # Client Dynamic Framework
-    d_acc = "💼 **Account Management Service**\n\nMinimum Equity Requirement: $500\nProfit Split: 50/50"
-    d_f_acc = "Format Required:\n1) Broker Name -\n2) Account ID -\n3) Password -"
-    d_vip = "👑 **VIP Premium Private Channel**\n\nJoin for Daily Gold target setups."
-    d_f_vip = "VIP Access Form:\nSend your payment screenshot."
-    d_cpy = "📋 **Copy Trading Service**\n\nAutomate your portfolio seamlessly."
+        # 👑 Admin Routing System (Replies to users)
+        if from_user_id == OWNER_ID and text and not text.startswith("/"):
+            conn = sqlite3.connect("new_join_filter_bot.db", timeout=20)
+            cursor = conn.cursor()
+            cursor.execute("SELECT target_user_id FROM admin_state WHERE admin_id = ?", (OWNER_ID,))
+            row = cursor.fetchone()
+            conn.close()
+            
+            if row:
+                target_id = row[0]
+                payload = {"chat_id": target_id, "text": f"💬 **Message from Admin:**\n\n{text}", "parse_mode": "Markdown"}
+                res = requests.post(f"{BASE_URL}/sendMessage", json=payload).json()
+                if res.get("ok"):
+                    requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": OWNER_ID, "text": f"✅ Message delivered to User ID: {target_id}"})
+                else:
+                    requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": OWNER_ID, "text": "❌ Delivery failed. User may have blocked the bot."})
+                return
 
-    if data == "m_menu":
-        requests.post(f"{BASE_URL}/editMessageText", json={"chat_id": chat_id, "message_id": msg_id, "text": "👋 Select system parameters:", "reply_markup": get_main_keyboard()})
-    elif data == "srv_account":
-        send_live_log_to_owner(f_user, "Clicked: Account Management Service")
-        kb = {"inline_keyboard": [[{"text": "🚀 Apply Now", "callback_data": "join_account"}], [{"text": "⬅️ Back", "callback_data": "m_menu"}]]}
-        requests.post(f"{BASE_URL}/editMessageText", json={"chat_id": chat_id, "message_id": msg_id, "text": get_content("account", d_acc), "reply_markup": kb})
-    elif data == "join_account":
-        send_live_log_to_owner(f_user, "Clicked: Account Application Form")
-        kb = {"inline_keyboard": [[{"text": "⬅️ Back", "callback_data": "srv_account"}]]}
-        requests.post(f"{BASE_URL}/editMessageText", json={"chat_id": chat_id, "message_id": msg_id, "text": get_content("form_account", d_f_acc), "reply_markup": kb})
-    elif data == "srv_vip":
-        send_live_log_to_owner(f_user, "Clicked: VIP Private Channel Info")
-        kb = {"inline_keyboard": [[{"text": "⭐ Join VIP Panel", "callback_data": "join_vip"}], [{"text": "⬅️ Back", "callback_data": "m_menu"}]]}
-        requests.post(f"{BASE_URL}/editMessageText", json={"chat_id": chat_id, "message_id": msg_id, "text": get_content("vip", d_vip), "reply_markup": kb})
-    elif data == "join_vip":
-        send_live_log_to_owner(f_user, "Clicked: VIP Registration Form")
-        kb = {"inline_keyboard": [[{"text": "⬅️ Back", "callback_data": "srv_vip"}]]}
-        requests.post(f"{BASE_URL}/editMessageText", json={"chat_id": chat_id, "message_id": msg_id, "text": get_content("form_vip", d_f_vip), "reply_markup": kb})
-    elif data == "srv_copy":
-        send_live_log_to_owner(f_user, "Clicked: Copy Trading Service")
-        kb = {"inline_keyboard": [[{"text": "⬅️ Back", "callback_data": "m_menu"}]]}
-        requests.post(f"{BASE_URL}/editMessageText", json={"chat_id": chat_id, "message_id": msg_id, "text": get_content("copy", d_cpy), "reply_markup": kb})
+        # Standard /start Command
+        if text and text.startswith("/start"):
+            log_user_history(from_user_id, "COMMAND", "/start executed")
+            name = from_user.get("first_name", "Trader")
+            uname = f"@{from_user.get('username')}" if from_user.get('username') else "No Username"
+            
+            welcome = (
+                f"👋 **Hello, {name}!**\n"
+                f"🌐 **Username:** {uname}\n"
+                f"🆔 **Your Telegram ID:** `{from_user_id}`\n\n"
+                "Welcome to **Gold Expert FX Automation Hub**. Please select any service from the interactive buttons below to view terms or apply:"
+            )
+            
+            payload = {"chat_id": chat_id, "text": welcome, "parse_mode": "Markdown", "reply_markup": get_main_keyboard()}
+            if from_user_id == OWNER_ID:
+                requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": chat_id, "text": f"👑 Welcome Back Prince Bhai. Admin menu activated below.", "reply_markup": get_owner_menu()})
+            
+            requests.post(f"{BASE_URL}/sendMessage", json=payload)
+            return
 
-# --- WORKER FOR BACKGROUND TASKS ---
-def cron_worker():
-    while True:
-        # Automated approvals processing loop
-        try:
-            reqs = db_run("SELECT user_id, chat_id FROM pending_channel_requests", fetch=True, multi=True)
-            if reqs:
-                for uid, cid in reqs:
-                    if requests.post(f"{BASE_URL}/approveChatJoinRequest", json={"chat_id": cid, "user_id": uid}).json().get("ok"):
-                        db_run("DELETE FROM pending_channel_requests WHERE user_id = ? AND chat_id = ?", (uid, cid))
-        except: pass
-        
-        # Mon-Fri Post Transmitter Scheduler
-        try:
-            now = datetime.now()
-            if now.weekday() <= 4:
-                jobs = db_run("SELECT id, post_text FROM schedules WHERE run_time = ? AND is_active = 1", (now.strftime("%H:%M"),), fetch=True, multi=True)
-                if jobs:
-                    for j in jobs:
-                        if requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": PRIVATE_CHANNEL_ID, "text": j[1], "parse_mode": "Markdown"}).json().get("ok"):
-                            db_run("UPDATE schedules SET is_active = 0 WHERE id = ?", (j[0],))
-        except: pass
-        time.sleep(20)
+        # Handle regular format or text submissions from users
+        if text and from_user_id != OWNER_ID:
+            log_user_history(from_user_id, "USER_MESSAGE", text)
+            
+            if "Broker name" in text or "Login ID" in text or "Password" in text:
+                requests.post(f"{BASE_URL}/sendMessage", json={
+                    "chat_id": chat_id, 
+                    "text": "⏳ **Format Received Successfully!**\n\nPlease wait while our team reviews your trading details and initializes your connection. We will notify you here directly.",
+                    "parse_mode": "Markdown"
+                })
+            
+            admin_alert = (
+                f"📥 **New User Interaction Message!**\n\n"
+                f"👤 **From:** {from_user.get('first_name')} | ID: `{from_user_id}`\n"
+                f"💬 **Content:** {text}\n\n"
+                f"👉 Use the Admin Panel menu to inspect history and reply."
+            )
+            requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": OWNER_ID, "text": admin_alert, "parse_mode": "Markdown"})
 
-# --- BOT MAIN CORE EXECUTION ---
-def main():
-    threading.Thread(target=cron_worker, daemon=True).start()
-    print("🚀 Ultimate Master Core Active...")
-    offset = 0
-    while True:
-        try:
-            res = requests.post(f"{BASE_URL}/getUpdates", json={"offset": offset, "timeout": 20, "allowed_updates": ["message", "callback_query", "chat_join_request"]}).json()
-            if res.get("ok"):
-                for u in res["result"]:
-                    offset = u["update_id"] + 1
-                    if "chat_join_request" in u:
-                        r = u["chat_join_request"]
-                        # Log incoming request to Owner live
-                        send_live_log_to_owner(r["from"], f"Requested to join Channel/Group (Chat ID: `{r['chat']['id']}`)")
-                        if not requests.post(f"{BASE_URL}/approveChatJoinRequest", json={"chat_id": r["chat"]["id"], "user_id": r["from"]["id"]}).json().get("ok"):
-                            db_run("INSERT OR IGNORE INTO pending_channel_requests VALUES (?, ?, ?)", (r["from"]["id"], r["chat"]["id"], time.time()))
-                    elif "message" in u: handle_incoming_message(u["message"])
-                    elif "callback_query" in u: handle_callback_query(u["callback_query"])
-        except: time.sleep(4)
+    # Auto reactions for Admin posts in community
+    if chat_id == FREE_GROUP_ID and from_user_id == OWNER_ID:
+        threading.Thread(target=lambda: requests.post(f"{BASE_URL}/setMessageReaction", json={
+            "chat_id": chat_id, "message_id": message_id, 
+            "reaction": [{"type": "emoji", "emoji": random.choice(EMOJI_POOL)}]}
+        ), daemon=True).start()
 
-if __name__ == "__main__":
-    main()
-        
+# 🎛️ Callback Queries Engine (Seamless Transitions)
+def handle_callback_query(callback):
+    c_id = callback["id"]
+    from_user = callback["from"]
+    from_user_id = from_user["id"]
+    chat_id = callback["message"]["chat"]["id"]
+    message_id = callback["message"]["message_id"]
+    data = callback["data"]
+    
+    requests.post(f"{BASE_URL}/answerCallbackQuery", json={"callback_query_id": c_id})
+    
+    # 📑 TEXT DATA STRINGS
+    account_management_text = (
+        "Account Management Service – Terms & Rules\n\n"
+        "Please read the following terms carefully before joining our Account Management Service.\n\n"
+        "1. Trading Account\n"
+        "You will provide your MT4 or MT5 login details so we can manage your trading account professionally.\n\n"
+        "2. Fund Security\n"
+        "Your funds always remain in your own trading account. We cannot deposit, withdraw, or transfer your money. Only you have full control over your funds.\n\n"
+        "3. Profit Sharing\n"
+        "All trading profits will be shared 50% for you and 50% for us.\n\n"
+        "4. Loss Sharing\n"
+        "If a trading loss occurs, the loss will also be shared 50/50. Since we receive 50% of the profit, we also accept 50% of the trading loss.\n\n"
+        "5. Profit Payment\n"
+        "After profit is generated, we will notify you. You can then send our 50% profit share using any of the payment methods listed below.\n\n"
+        "6. No Scam\n"
+        "This is a transparent and honest service. There are no hidden charges, no scams, and no fake promises.\n\n"
+        "7. No Long-Term Commitment\n"
+        "You are free to start or stop the service at any time. There is no pressure or obligation to continue working with us.\n\n"
+        "Accepted Brokers\n"
+        "✅ All Brokers Accepted\n\n"
+        "Accepted Payment Methods\n"
+        "- Binance\n- USDT\n- Skrill\n- Neteller\n- Bitcoin (BTC)\n- Ethereum (ETH)\n- Perfect Money\n- WebMoney\n\n"
+        "Thank you for choosing our Account Management Service. We look forward to building a successful and long-term partnership with you."
+    )
+    
+    vip_text = (
+        "Join Our VIP Premium Group\n\n"
+        "If you ever miss our free signals or want more trading opportunities with higher consistency, you can join our VIP Premium Group.\n\n"
+        "What You Get:\n"
+        "- ✅ 5–7 XAUUSD signals daily\n"
+        "- ✅ High-accuracy trade setups\n"
+        "- ✅ Point-by-point trade updates\n"
+        "- ✅ Entry, Take Profit & Stop Loss levels\n"
+        "- ✅ Market analysis & chart analysis\n"
+        "- ✅ Trading rules and risk management guidance\n"
+        "- ✅ Learning and educational support\n\n"
+        "If, after joining, you feel the VIP Premium Group does not provide the services described above, you may contact our support team to request cancellation. In that case, we will deduct 30% as a service fee and refund the remaining 70% of your payment, subject to our refund policy.\n\n"
+        "VIP Membership Packages\n"
+        "- 💎 Lifetime Access: $700 (One-Time Payment)\n"
+        "- 📅 1 Year: $500\n"
+        "- 📆 1 Month: $300\n"
+        "- 📈 1 Week: $100\n\n"
+        "«Note: All packages include the same VIP features. The only difference is the membership duration.»\n\n"
+        "You can judge our trading accuracy by following our Free Signals Channel/Group before upgrading.\n\n"
+        "If you need more information or have any questions, feel free to contact us. Our support team will be happy to assist you."
+    )
+    
+    copy_trading_text = (
+        "📋 Copy Trading Terms & Conditions\n\n"
+        "Gold Expert FX | Copy Trading Rules\n\n"
+        "1. Account Requirement\n"
+        "- Client ke paas MT4 ya MT5 trading account hona chahiye.\n"
+        "- Account kisi supported broker par hona chahiye.\n\n"
+        "2. Copy Trading Setup\n"
+        "- Client apna Investor Password ya Copy Trading connection details provide karega.\n"
+        "- Account ki ownership hamesha client ke paas rahegi.\n\n"
+        "3. Minimum Deposit\n"
+        "- Recommended minimum deposit: $200 ya us se zyada.\n\n"
+        "4. Risk Warning\n"
+        "- Forex aur Gold trading high-risk business hai.\n"
+        "- Profit guaranteed nahi hota.\n"
+        "- Market ki volatility ki wajah se loss bhi ho sakta.\n\n"
+        "5. Profit & Loss\n"
+        "- Account ka sara profit aur loss client ke account mein hi hoga.\n"
+        "- Gold Expert FX market conditions ke mutabiq trades provide karega.\n\n"
+        "6. No Deposit Withdrawal\n"
+        "- Hum kabhi bhi client ke account se funds withdraw nahi kar sakte.\n"
+        "- Funds par sirf account owner ka control hota hai.\n\n"
+        "7. VPS & Internet\n"
+        "- Copy Trading ko smoothly chalane ke liye stable internet ya VPS use karna recommended hai.\n\n"
+        "8. Account Changes\n"
+        "- Client bina inform kiye leverage, password, ya account settings change na kare.\n"
+        "- Agar changes kiye gaye to service temporarily stop ki ja sakti hai.\n\n"
+        "9. Responsibility\n"
+        "- Client apne account aur broker ki policies ka khud zimmedar hoga.\n"
+        "- Broker ki kisi technical problem ya slippage ke liye Gold Expert FX responsible nahi hoga.\n\n"
+        "10. Trading Results\n"
+        "- Past performance future profit ki guarantee nahi hoti.\n"
+        "- Har trade mein risk hota hai.\n\n"
+        "11. Service Cancellation\n"
+        "- Gold Expert FX kisi bhi waqt rules violation ya misuse ki surat mein Copy Trading service terminate kar sakta hai.\n\n"
+        "12. Agreement\n"
+        "- Copy Trading service join karte hi client in tamam Terms & Conditions ko accept karta hai.\n\n"
+        "Copy Trading Service\n\n"
+        "If you don't have enough time to analyze the market or place trades manually, you can join our Copy Trading Service.\n\n"
+        "Our Copy Trading Service allows our trades to be copied automatically to your trading account. Simply complete the setup once, and your account will receive our trades automatically. You don't need to monitor the market or trade manually.\n\n"
+        "What You Get\n"
+        "- ✅ Automatic trade copying\n"
+        "- ✅ Professional trade management\n"
+        "- ✅ No daily market analysis required\n"
+        "- ✅ Save your valuable time\n"
+        "- ✅ One-time setup\n"
+        "- ✅ No monthly subscription\n"
+        "- ✅ No hidden charges\n"
+        "- ✅ One-time payment only\n\n"
+        "Supported Brokers\n"
+        "We support all MT4 and MT5 brokers.\n\n"
+        "After your payment has been successfully confirmed, we will provide you with all the required Copy Trading details and guide you through the complete setup process.\n\n"
+        "Copy Trading Fee\n"
+        "💰 One-Time Payment: $1,000\n\n"
+        "There are no monthly fees, no profit-sharing, and no hidden commissions. After paying the one-time fee, you can use our Copy Trading Service without any additional service charges.\n\n"
+        "Risk & Refund Policy\n"
+        "We use professional risk management and always try to protect our clients' accounts. However, trading in financial markets always involves risk, and no one can guarantee that losses will never occur or that profits are guaranteed.\n\n"
+        "If you decide to cancel the Copy Trading Service, you may contact our support team.\n\n"
+        "According to our refund policy:\n"
+        "- We will deduct 30% as a service and administration fee.\n"
+        "- The remaining 70% of your one-time payment will be refunded to you.\n\n"
+        "Contact Us\n"
+        "If you have any questions or need more information, feel free to contact our support team. We will be happy to assist you with the registration and setup process."
+    )
+
+    # 🔗 EXECUTIVE SWITCHBOARD (Modifying states via editMessageText)
+    if data == "srv_account":
+        log_user_history(from_user_id, "NAVIGATE", "Viewed Account Management Rules")
+        kb = {"inline_keyboard": [[{"text": "🚀 Join Service Now", "callback_data": "join_account"}]]}
+        requests.post(f"{BASE_URL}/editMessageText", json={"chat_id": chat_id, "m
