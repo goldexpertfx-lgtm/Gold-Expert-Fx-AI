@@ -2,7 +2,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKe
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
 # --- CONFIGURATION ---
-TOKEN = 'YOUR_BOT_TOKEN_HERE' # Apna token yahan dalen
+TOKEN = '8851943854:AAGfy9xw9srlQCE5g_yH0hMYqjPsI5NC-e4' # Apna token yahan dalen
 ADMIN_ID = 7415265825          # Apni Telegram ID yahan dalen
 
 # Database for users
