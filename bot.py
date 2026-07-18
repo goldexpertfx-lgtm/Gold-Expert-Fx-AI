@@ -1,99 +1,47 @@
-import os
-import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
+# --- User Menu Keyboard (Jo sabko dikhega) ---
+def get_user_menu():
+    keyboard = [
+        [InlineKeyboardButton("📊 Account Management", callback_data="svc_acc")],
+        [InlineKeyboardButton("💎 VIP Services", callback_data="svc_vip")],
+        [InlineKeyboardButton("📈 Copy Trading", callback_data="svc_copy")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
 
-# --- Configuration ---
-TOKEN = os.environ.get("BOT_TOKEN")
-ADMIN_ID = 7415265825  # Aapki ID
-PARTNER_LINK = "https://www.brokeraccountguide.com/"
-SUPPORT_LINK = "https://t.me/MuhammadPrince7"
-
-# --- Data Stores ---
-user_registry = {}  # {user_id: user_info}
-reply_targets = {}  # {admin_id: target_user_id}
-
-logging.basicConfig(level=logging.INFO)
-
-# --- Admin Keyboard ---
+# --- Admin Keyboard (Jo sirf aapko dikhega) ---
 def get_admin_keyboard():
     keyboard = [
         [KeyboardButton("👥 Users List"), KeyboardButton("✏️ Edit Start Text")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
 
-# ===== START FUNCTION =====
+# ===== UPDATED START FUNCTION =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    user_registry[user.id] = user  # User ko list mein add kiya
+    user_registry[user.id] = user 
 
-    # Admin check
+    welcome_text = (
+        f"**Welcome to Gold Expert Fx Community, {user.first_name}!** 🥇\n\n"
+        "Hum aapki trading journey ko professional banane ke liye yahan hain. "
+        "Neeche diye gaye buttons se hamari services select karein:"
+    )
+
     if user.id == ADMIN_ID:
-        await update.message.reply_text("Welcome Admin, Gold Expert Fx Control Panel:", reply_markup=get_admin_keyboard())
+        # Admin ko dono dikhenge
+        await update.message.reply_text("Admin Control Panel Active:", reply_markup=get_admin_keyboard())
+        await update.message.reply_text(welcome_text, parse_mode="Markdown", reply_markup=get_user_menu())
     else:
-        welcome_text = f"**Hey, {user.first_name}!** 👋\nWelcome to Broker Account Guide Bot!"
-        await update.message.reply_text(welcome_text, parse_mode="Markdown")
+        # Users ko sirf services dikhengi
+        await update.message.reply_text(welcome_text, parse_mode="Markdown", reply_markup=get_user_menu())
 
-# ===== ADMIN BUTTON HANDLERS =====
-async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    user = update.effective_user
-    if user.id != ADMIN_ID: return
-
-    if text == "👥 Users List":
-        buttons = []
-        for uid, uinfo in user_registry.items():
-            buttons.append([InlineKeyboardButton(f"{uinfo.first_name} (@{uinfo.username or 'NoUser'})", callback_data=f"user_{uid}")])
-        
-        await update.message.reply_text("Select a user to manage:", reply_markup=InlineKeyboardMarkup(buttons))
-
-    elif text == "✏️ Edit Start Text":
-        await update.message.reply_text("Feature coming soon! (Database update required)")
-
-# ===== USER DASHBOARD (Admin Only) =====
-async def user_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ===== NEW CALLBACK HANDLER (Services ke liye) =====
+async def service_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+
+    if query.data == "svc_acc":
+        await query.edit_message_text("🛠 **Account Management:**\nHum aapke account ko expert levels par manage karte hain. Details ke liye contact karein: @MuhammadPrince7")
+    elif query.data == "svc_vip":
+        await query.edit_message_text("💎 **VIP Services:**\nExclusive signals aur daily market analysis ke liye hamara VIP group join karein.")
+    elif query.data == "svc_copy":
+        await query.edit_message_text("📈 **Copy Trading:**\nHamare trades ko auto-copy karein. Join link: https://www.brokeraccountguide.com/")
     
-    if query.data.startswith("user_"):
-        target_id = int(query.data.split("_")[1])
-        reply_targets[update.effective_user.id] = target_id # Admin ka target set kiya
-        uinfo = user_registry.get(target_id)
-        
-        msg = f"👤 **Dashboard: {uinfo.first_name}**\nID: `{target_id}`\n\nSend a message here, and I will forward it to the user."
-        await query.edit_message_text(msg, parse_mode="Markdown")
-
-# ===== MESSAGE HANDLER =====
-async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    text = update.message.text
-
-    # 1. Agar Admin kisi ko reply kar raha hai
-    if user.id == ADMIN_ID and user.id in reply_targets:
-        target_id = reply_targets[user.id]
-        try:
-            await context.bot.send_message(chat_id=target_id, text=f"📢 **Message from Admin:**\n\n{text}")
-            await update.message.reply_text("✅ Message sent to user!")
-        except:
-            await update.message.reply_text("❌ Could not send message (User might have blocked bot).")
-        return
-
-    # 2. General User flow (Save user and notify admin)
-    user_registry[user.id] = user
-    await update.message.reply_text("✅ Received! Our team will verify this shortly.")
-    
-    # Notify Admin
-    try:
-        await context.bot.send_message(chat_id=ADMIN_ID, text=f"🔔 **New Msg from {user.first_name}**:\n{text}")
-    except: pass
-
-if __name__ == "__main__":
-    app = ApplicationBuilder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(user_dashboard))
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), admin_actions)) # Keyboard buttons
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), message_handler))
-    
-    print("Bot is running...")
-    app.run_polling()
-        
