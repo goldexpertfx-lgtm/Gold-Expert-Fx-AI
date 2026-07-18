@@ -52,7 +52,6 @@ def init_db():
             target_user_id INTEGER
         )
     """)
-    # 📝 Table to save dynamic content changes from the bot
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS dynamic_content (
             service_key TEXT PRIMARY KEY,
@@ -70,7 +69,6 @@ def init_db():
 
 init_db()
 
-# 📝 Load content dynamically with fallback to your defaults
 def get_content(service_key, default_text):
     try:
         conn = sqlite3.connect("new_join_filter_bot.db", timeout=20)
@@ -104,7 +102,6 @@ def log_user_history(user_id, action_type, details):
         conn.close()
     except Exception: pass
 
-# 🧱 Keyboards Setup
 def get_main_keyboard():
     return {
         "inline_keyboard": [
@@ -124,7 +121,6 @@ def get_owner_menu():
         "one_time_keyboard": False
     }
 
-# 🛡️ Main Message Router
 def handle_incoming_message(msg):
     chat_id = msg.get("chat", {}).get("id")
     message_id = msg.get("message_id")
@@ -156,7 +152,6 @@ def handle_incoming_message(msg):
             conn.close()
         except Exception: pass
 
-        # 👑 Admin Panels Menu Navigation
         if from_user_id == OWNER_ID:
             if text == "👥 View All Users (Admin Panel)":
                 conn = sqlite3.connect("new_join_filter_bot.db", timeout=20)
@@ -191,7 +186,6 @@ def handle_incoming_message(msg):
                 requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": OWNER_ID, "text": "🛠️ **Which service text content do you want to modify, Prince Bhai?**\n\nSelect an option below, then paste the new text completely.", "parse_mode": "Markdown", "reply_markup": kb})
                 return
 
-        # 👑 Handle Ongoing Editing Text Process for Admin
         if from_user_id == OWNER_ID and text and not text.startswith("/"):
             conn = sqlite3.connect("new_join_filter_bot.db", timeout=20)
             cursor = conn.cursor()
@@ -202,7 +196,6 @@ def handle_incoming_message(msg):
             if edit_row and edit_row[0]:
                 service_key = edit_row[0]
                 if set_content(service_key, text):
-                    # Reset state
                     conn = sqlite3.connect("new_join_filter_bot.db", timeout=20)
                     cursor = conn.cursor()
                     cursor.execute("DELETE FROM admin_edit_state WHERE admin_id = ?", (OWNER_ID,))
@@ -213,7 +206,6 @@ def handle_incoming_message(msg):
                     requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": OWNER_ID, "text": "❌ Database error while updating text."})
                 return
 
-        # 👑 Admin Text Reply Routing to Users (CRM Mode)
         if from_user_id == OWNER_ID and text and not text.startswith("/"):
             conn = sqlite3.connect("new_join_filter_bot.db", timeout=20)
             cursor = conn.cursor()
@@ -224,14 +216,13 @@ def handle_incoming_message(msg):
             if row:
                 target_id = row[0]
                 payload = {"chat_id": target_id, "text": f"💬 **Message from Admin:**\n\n{text}", "parse_mode": "Markdown"}
-                res = requests.post(f"{BASE_URL}/sendMessage", json=payload).json()
-                if res.get("ok"):
-                    requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": OWNER_ID, "text": f"✅ Message delivered to User ID: {target_id}"})
-                else:
-                    requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": OWNER_ID, "text": "❌ Delivery failed. User may have blocked the bot."})
+                res = requests.post(f"{BASE_URL}/sendMessage", json={
+                    "chat_id": OWNER_ID, 
+                    "text": "⏳ **Format Received Successfully!**\n\nPlease wait while our team reviews your trading details and initializes your connection. We will notify you here directly.",
+                    "parse_mode": "Markdown"
+                })
                 return
 
-        # Command /start execution
         if text and text.startswith("/start"):
             log_user_history(from_user_id, "COMMAND", "/start executed")
             name = from_user.get("first_name", "Trader")
@@ -251,10 +242,13 @@ def handle_incoming_message(msg):
                 payload["reply_markup"] = get_owner_menu()
                 requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": chat_id, "text": f"👑 Welcome Back Prince Bhai. Admin menu activated below.", "reply_markup": get_owner_menu()})
             
-            requests.post(f"{BASE_URL}/sendMessage", json=payload)
+            requests.post(f"{BASE_URL}/sendMessage", json={
+                "chat_id": OWNER_ID, 
+                "text": "⏳ **Format Received Successfully!**\n\nPlease wait while our team reviews your trading details and initializes your connection. We will notify you here directly.",
+                "parse_mode": "Markdown"
+            })
             return
 
-        # Handle user text submission (e.g. Account format submission)
         if text and from_user_id != OWNER_ID:
             log_user_history(from_user_id, "USER_MESSAGE", text)
             
@@ -285,7 +279,6 @@ def handle_incoming_message(msg):
             if not (msg.get("forward_from_chat", {}).get("id") == PRIVATE_CHANNEL_ID or from_user_id == OWNER_ID):
                 requests.post(f"{BASE_URL}/deleteMessage", json={"chat_id": chat_id, "message_id": message_id})
 
-# 🎛️ Callback Queries (Dynamic Interface Flow)
 def handle_callback_query(callback):
     c_id = callback["id"]
     from_user = callback["from"]
@@ -296,106 +289,174 @@ def handle_callback_query(callback):
     
     requests.post(f"{BASE_URL}/answerCallbackQuery", json={"callback_query_id": c_id})
     
-    # 📝 BASE STABLE DEFAULT TEXTS
-    def_account_text = (
-        "Account Management Service – Terms & Rules\n\n"
-        "Please read the following terms carefully before joining our Account Management Service.\n\n"
-        "1. Trading Account\n"
-        "You will provide your MT4 or MT5 login details so we can manage your trading account professionally.\n\n"
-        "2. Fund Security\n"
-        "Your funds always remain in your own trading account. We cannot deposit, withdraw, or transfer your money. Only you have full control over your funds.\n\n"
-        "3. Profit Sharing\n"
-        "All trading profits will be shared 50% for you and 50% for us.\n\n"
-        "4. Loss Sharing\n"
-        "If a trading loss occurs, the loss will also be shared 50/50. Since we receive 50% of the profit, we also accept 50% of the trading loss.\n\n"
-        "5. Profit Payment\n"
-        "After profit is generated, we will notify you. You can then send our 50% profit share using any of the payment methods listed below.\n\n"
-        "6. No Scam\n"
-        "This is a transparent and honest service. There are no hidden charges, no scams, and no fake promises.\n\n"
-        "7. No Long-Term Commitment\n"
-        "You are free to start or stop the service at any time. There is no pressure or obligation to continue working with us.\n\n"
-        "Accepted Brokers\n"
-        "✅ All Brokers Accepted\n\n"
-        "Accepted Payment Methods\n"
-        "- Binance\n- USDT\n- Skrill\n- Neteller\n- Bitcoin (BTC)\n- Ethereum (ETH)\n- Perfect Money\n- WebMoney\n\n"
-        "Thank you for choosing our Account Management Service. We look forward to building a successful and long-term partnership with you."
-    )
+    def_account_text = """Account Management Service – Terms & Rules
+
+Please read the following terms carefully before joining our Account Management Service.
+
+1. Trading Account
+You will provide your MT4 or MT5 login details so we can manage your trading account professionally.
+
+2. Fund Security
+Your funds always remain in your own trading account. We cannot deposit, withdraw, or transfer your money. Only you have full control over your funds.
+
+3. Profit Sharing
+All trading profits will be shared 50% for you and 50% for us.
+
+4. Loss Sharing
+If a trading loss occurs, the loss will also be shared 50/50. Since we receive 50% of the profit, we also accept 50% of the trading loss.
+
+5. Profit Payment
+After profit is generated, we will notify you. You can then send our 50% profit share using any of the payment methods listed below.
+
+6. No Scam
+This is a transparent and honest service. There are no hidden charges, no scams, and no fake promises.
+
+7. No Long-Term Commitment
+You are free to start or stop the service at any time. There is no pressure or obligation to continue working with us.
+
+Accepted Brokers
+✅ All Brokers Accepted
+
+Accepted Payment Methods
+- Binance
+- USDT
+- Skrill
+- Neteller
+- Bitcoin (BTC)
+- Ethereum (ETH)
+- Perfect Money
+- WebMoney
+
+Thank you for choosing our Account Management Service. We look forward to building a successful and long-term partnership with you."""
     
-    def_vip_text = (
-        "Join Our VIP Premium Group\n\n"
-        "If you ever miss our free signals or want more trading opportunities with higher consistency, you can join our VIP Premium Group.\n\n"
-        "What You Get:\n"
-        "- ✅ 5–7 XAUUSD signals daily\n"
-        "- ✅ High-accuracy trade setups\n"
-        "- ✅ Point-by-point trade updates\n"
-        "- ✅ Entry, Take Profit & Stop Loss levels\n"
-        "- ✅ Market analysis & chart analysis\n"
-        "- ✅ Trading rules and risk management guidance\n"
-        "- ✅ Learning and educational support\n\n"
-        "If, after joining, you feel the VIP Premium Group does not provide the services described above, you may contact our support team to request cancellation. In that case, we will deduct 30% as a service fee and refund the remaining 70% of your payment, subject to our refund policy.\n\n"
-        "VIP Membership Packages\n"
-        "- 💎 Lifetime Access: $700 (One-Time Payment)\n"
-        "- 📅 1 Year: $500\n"
-        "- 📆 1 Month: $300\n"
-        "- 📈 1 Week: $100\n\n"
-        "«Note: All packages include the same VIP features. The only difference is the membership duration.»\n\n"
-        "You can judge our trading accuracy by following our Free Signals Channel/Group before upgrading.\n\n"
-        "If you need more information or have any questions, feel free to contact us. Our support team will be happy to assist you."
-    )
+    def_vip_text = """Join Our VIP Premium Group
+
+If you ever miss our free signals or want more trading opportunities with higher consistency, you can join our VIP Premium Group.
+
+What You Get:
+- ✅ 5–7 XAUUSD signals daily
+- ✅ High-accuracy trade setups
+- ✅ Point-by-point trade updates
+- ✅ Entry, Take Profit & Stop Loss levels
+- ✅ Market analysis & chart analysis
+- ✅ Trading rules and risk management guidance
+- ✅ Learning and educational support
+
+If, after joining, you feel the VIP Premium Group does not provide the services described above, you may contact our support team to request cancellation. In that case, we will deduct 30% as a service fee and refund the remaining 70% of your payment, subject to our refund policy.
+
+VIP Membership Packages
+- 💎 Lifetime Access: $700 (One-Time Payment)
+- 📅 1 Year: $500
+- 📆 1 Month: $300
+- 📈 1 Week: $100
+
+«Note: All packages include the same VIP features. The only difference is the membership duration.»
+
+You can judge our trading accuracy by following our Free Signals Channel/Group before upgrading.
+
+If you need more information or have any questions, feel free to contact us. Our support team will be happy to assist you."""
     
-    def_copy_text = (
-        "📋 Copy Trading Terms & Conditions\n\n"
-        "Gold Expert FX | Copy Trading Rules\n\n"
-        "1. Account Requirement\n"
-        "- Client ke paas MT4 ya MT5 trading account hona chahiye.\n"
-        "- Account kisi supported broker par hona chahiye.\n\n"
-        "2. Copy Trading Setup\n"
-        "- Client apna Investor Password ya Copy Trading connection details provide karega.\n"
-        "- Account ki ownership hamesha client ke paas rahegi.\n\n"
-        "3. Minimum Deposit\n"
-        "- Recommended minimum deposit: $200 ya us se zyada.\n\n"
-        "4. Risk Warning\n"
-        "- Forex aur Gold trading high-risk business hai.\n"
-        "- Profit guaranteed nahi hota.\n"
-        "- Market ki volatility ki wajah se loss bhi ho sakta.\n\n"
-        "5. Profit & Loss\n"
-        "- Account ka sara profit aur loss client ke account mein hi hoga.\n"
-        "- Gold Expert FX market conditions ke mutabiq trades provide karega.\n\n"
-        "6. No Deposit Withdrawal\n"
-        "- Hum kabhi bhi client ke account se funds withdraw nahi kar sakte.\n"
-        "- Funds par sirf account owner ka control hota hai.\n\n"
-        "7. VPS & Internet\n"
-        "- Copy Trading ko smoothly chalane ke liye stable internet ya VPS use karna recommended hai.\n\n"
-        "8. Account Changes\n"
-        "- Client bina inform kiye leverage, password, ya account settings change na kare.\n"
-        "- Agar changes kiye gaye to service temporarily stop ki ja sakti hai.\n\n"
-        "9. Responsibility\n"
-        "- Client apne account aur broker ki policies ka khud zimmedar hoga.\n"
-        "- Broker ki kisi technical problem ya slippage ke liye Gold Expert FX responsible nahi hoga.\n\n"
-        "10. Trading Results\n"
-        "- Past performance future profit ki guarantee nahi hoti.\n"
-        "- Har trade mein risk hota hai.\n\n"
-        "11. Service Cancellation\n"
-        "- Gold Expert FX kisi bhi waqt rules violation ya misuse ki surat mein Copy Trading service terminate kar sakta hai.\n\n"
-        "12. Agreement\n"
-        "- Copy Trading service join karte hi client in tamam Terms & Conditions ko accept karta hai.\n\n"
-        "Copy Trading Service\n\n"
-        "If you don't have enough time to analyze the market or place trades manually, you can join our Copy Trading Service.\n\n"
-        "Our Copy Trading Service allows our trades to be copied automatically to your trading account. Simply complete the setup once, and your account will receive our trades automatically. You don't need to monitor the market or trade manually.\n\n"
-        "What You Get\n"
-        "- ✅ Automatic trade copying\n"
-        "- ✅ Professional trade management\n"
-        "- ✅ No daily market analysis required\n"
-        "- ✅ Save your valuable time\n"
-        "- ✅ One-time setup\n"
-        "- ✅ No monthly subscription\n"
-        "- ✅ No hidden charges\n"
-        "- ✅ One-time payment only\n\n"
-        "Supported Brokers\n"
-        "We support all MT4 and MT5 brokers.\n\n"
-        "After your payment has been successfully confirmed, we will provide you with all the required Copy Trading details and guide you through the complete setup process.\n\n"
-        "Copy Trading Fee\n"
-        "💰 One-Time Payment: $1,000\n\n"
-        "There are no monthly fees, no profit-sharing, and no hidden commissions. After paying the one-time fee, you can use our Copy Trading Service without any additional service charges.\n\n"
-        "Risk & Refund Policy\n"
-        "We use pr
+    def_copy_text = """📋 Copy Trading Terms & Conditions
+
+Gold Expert FX | Copy Trading Rules
+
+1. Account Requirement
+- Client ke paas MT4 ya MT5 trading account hona chahiye.
+- Account kisi supported broker par hona chahiye.
+
+2. Copy Trading Setup
+- Client apna Investor Password ya Copy Trading connection details provide karega.
+- Account ki ownership hamesha client ke paas rahegi.
+
+3. Minimum Deposit
+- Recommended minimum deposit: $200 ya us se zyada.
+
+4. Risk Warning
+- Forex aur Gold trading high-risk business hai.
+- Profit guaranteed nahi hota.
+- Market ki volatility ki wajah se loss bhi ho sakta.
+
+5. Profit & Loss
+- Account ka sara profit aur loss client ke account mein hi hoga.
+- Gold Expert FX market conditions ke mutabiq trades provide karega.
+
+6. No Deposit Withdrawal
+- Hum kabhi bhi client ke account se funds withdraw nahi kar sakte.
+- Funds par sirf account owner ka control hota hai.
+
+7. VPS & Internet
+- Copy Trading ko smoothly chalane ke liye stable internet ya VPS use karna recommended hai.
+
+8. Account Changes
+- Client bina inform kiye leverage, password, ya account settings change na kare.
+- Agar changes kiye gaye to service temporarily stop ki ja sakti hai.
+
+9. Responsibility
+- Client apne account aur broker ki policies ka khud zimmedar hoga.
+- Broker ki kisi technical problem ya slippage ke liye Gold Expert FX responsible nahi hoga.
+
+10. Trading Results
+- Past performance future profit ki guarantee nahi hoti.
+- Har trade mein risk hota hai.
+
+11. Service Cancellation
+- Gold Expert FX kisi bhi waqt rules violation ya misuse ki surat mein Copy Trading service terminate kar sakta hai.
+
+12. Agreement
+- Copy Trading service join karte hi client in tamam Terms & Conditions ko accept karta hai.
+
+Copy Trading Service
+
+If you don't have enough time to analyze the market or place trades manually, you can join our Copy Trading Service.
+
+Our Copy Trading Service allows our trades to be copied automatically to your trading account. Simply complete the setup once, and your account will receive our trades automatically. You don't need to monitor the market or trade manually.
+
+What You Get
+- ✅ Automatic trade copying
+- ✅ Professional trade management
+- ✅ No daily market analysis required
+- ✅ Save your valuable time
+- ✅ One-time setup
+- ✅ No monthly subscription
+- ✅ No hidden charges
+- ✅ One-time payment only
+
+Supported Brokers
+We support all MT4 and MT5 brokers.
+
+After your payment has been successfully confirmed, we will provide you with all the required Copy Trading details and guide you through the complete setup process.
+
+Copy Trading Fee
+💰 One-Time Payment: $1,000
+
+There are no monthly fees, no profit-sharing, and no hidden commissions. After paying the one-time fee, you can use our Copy Trading Service without any additional service charges.
+
+Risk & Refund Policy
+We use professional risk management and always try to protect our clients' accounts. However, trading in financial markets always involves risk, and no one can guarantee that losses will never occur or that profits are guaranteed.
+
+If you decide to cancel the Copy Trading Service, you may contact our support team.
+
+According to our refund policy:
+- We will deduct 30% as a service and administration fee.
+- The remaining 70% of your one-time payment will be refunded to you.
+
+Contact Us
+If you have any questions or need more information, feel free to contact our support team. We will be happy to assist you with the registration and setup process."""
+
+    if data.startswith("edt_") and from_user_id == OWNER_ID:
+        action = data.split("_")[1]
+        if action == "cancel":
+            conn = sqlite3.connect("new_join_filter_bot.db", timeout=20)
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM admin_edit_state WHERE admin_id = ?", (OWNER_ID,))
+            conn.commit()
+            conn.close()
+            requests.post(f"{BASE_URL}/editMessageText", json={"chat_id": chat_id, "message_id": message_id, "text": "❌ Editing process cancelled smoothly."})
+            return
+        
+        conn = sqlite3.connect("new_join_filter_bot.db", timeout=20)
+        cursor = conn.cursor()
+        cursor.execute("INSERT OR REPLACE INTO admin_edit_state VALUES (?, ?)", (OWNER_ID, action))
+        conn.commit()
+        conn.close()
+        requests.post(f"{BASE_URL}/editMessageText", json={"chat_id"
