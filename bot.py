@@ -364,7 +364,6 @@ def handle_callback_query(callback):
         "If you have any questions or need more information, feel free to contact our support team. We will be happy to assist you with the registration and setup process."
     )
 
-    # Clean multi-line structure to ensure text never cuts off mid-string
     if data == "srv_account":
         log_user_history(from_user_id, "NAVIGATE", "Viewed Account Management Rules")
         kb = {"inline_keyboard": [[{"text": "🚀 Join Service Now", "callback_data": "join_account"}]]}
@@ -385,4 +384,5 @@ def handle_callback_query(callback):
             "4) Deposit Amount - (Minimum $500)\n"
             "5) Login ID -\n"
             "6) Password -\n"
- 
+            "7) Leverage - ( Minimum 1:500)\n"
+            "8) How you will
