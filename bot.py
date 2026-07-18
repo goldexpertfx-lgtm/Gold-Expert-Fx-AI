@@ -333,8 +333,7 @@ def handle_callback_query(callback):
         "- Past performance future profit ki guarantee nahi hoti.\n"
         "- Har trade mein risk hota hai.\n\n"
         "11. Service Cancellation\n"
-        "- Gold Expert FX kisi bhi waqt rules violation ya misuse ki surat mein Copy Trading service terminate kar sakta hai.\n\n"
-        "12. Agreement\n"
+        "- Gold Expert FX kisi bhi waqt rules violation ya misuse ki surat mein Copy Trading service terminate kar sakta hai.\n"
         "- Copy Trading service join karte hi client in tamam Terms & Conditions ko accept karta hai.\n\n"
         "Copy Trading Service\n\n"
         "If you don't have enough time to analyze the market or place trades manually, you can join our Copy Trading Service.\n\n"
@@ -385,4 +384,4 @@ def handle_callback_query(callback):
             "5) Login ID -\n"
             "6) Password -\n"
             "7) Leverage - ( Minimum 1:500)\n"
-            "8) How you will
+            "8) How you will send money? (Methods: Binan
