@@ -403,10 +403,10 @@ There are no monthly fees, no profit-sharing, and no hidden commissions. After p
         log_user_history(from_user_id, "ACTION", "Selected Payment Setup Execution Flow")
         requests.post(f"{BASE_URL}/editMessageText", json={"chat_id": chat_id, "message_id": message_id, "text": "⏳ **Please wait...** our team is compiling your exclusive secure transaction parameters. Standby instructions will follow shortly here."})
 
-def auto_request_approver():
-    while True:
-        try:
-            conn = sqlite3.connect("gold_expert_premium.db", timeout=20)
-            cursor = conn.cursor()
-            cursor.execute("SELECT user_id, chat_id FROM pending_channel_requests")
-    
+def check_and_approve():
+    try:
+        conn = sqlite3.connect("gold_expert_premium.db", timeout=20)
+        cursor = conn.cursor()
+        cursor.execute("SELECT user_id, chat_id FROM pending_channel_requests")
+        reqs = cursor.fetchall()
+   
