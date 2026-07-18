@@ -2,8 +2,9 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKe
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
 # --- CONFIGURATION ---
-TOKEN = '8851943854:AAGfy9xw9srlQCE5g_yH0hMYqjPsI5NC-e4' # Apna token yahan dalen
-ADMIN_ID = 7415265825          # Apni Telegram ID yahan dalen
+# Apni ID yahan sahi se daalein
+TOKEN = '8851943854:AAGfy9xw9srlQCE5g_yH0hMYqjPsI5NC-e4' 
+ADMIN_ID = 7415265825          
 
 # Database for users
 user_registry = {}
@@ -24,33 +25,41 @@ def get_admin_keyboard():
 # --- HANDLERS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    user_registry[user.id] = user.username
+    # User ko save kar rahe hain (username agar na ho to 'N/A' save hoga)
+    user_registry[user.id] = user.username or user.first_name
     
-    welcome_text = f"Welcome {user.first_name}! Gold Expert Fx mein khush amdeed."
+    welcome_text = f"**Welcome to Gold Expert Fx, {user.first_name}!** 🥇\n\nHum aapki trading journey ko professional banane ke liye yahan hain."
     
     if user.id == ADMIN_ID:
         await update.message.reply_text("Admin Panel Active:", reply_markup=get_admin_keyboard())
     
-    await update.message.reply_text(welcome_text, reply_markup=get_user_menu())
+    await update.message.reply_text(welcome_text, parse_mode="Markdown", reply_markup=get_user_menu())
 
 async def service_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
     responses = {
-        "svc_acc": "🛠 Account Management: Detail yahan hai...",
-        "svc_vip": "💎 VIP Services: Join karne ke liye click karein...",
-        "svc_copy": "📈 Copy Trading: Link: https://www.brokeraccountguide.com/"
+        "svc_acc": "🛠 **Account Management:**\nHum aapke account ko expert levels par manage karte hain. Contact: @MuhammadPrince7",
+        "svc_vip": "💎 **VIP Services:**\nExclusive signals aur daily market analysis ke liye hamara VIP group join karein.",
+        "svc_copy": "📈 **Copy Trading:**\nHamare trades ko auto-copy karein. Join link: https://www.brokeraccountguide.com/"
     }
-    await query.edit_message_text(responses.get(query.data, "Service unavailable."))
+    await query.edit_message_text(responses.get(query.data, "Service unavailable."), parse_mode="Markdown")
 
 async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
-    if update.effective_user.id != ADMIN_ID: return
+    if update.effective_user.id != ADMIN_ID: 
+        return
 
     if text == "👥 Users List":
-        user_list = "\n".join([f"{name} (@{uname})" for uname in user_registry.values()])
-        await update.message.reply_text(f"Total Users: {len(user_registry)}\n\n{user_list}")
+        if not user_registry:
+            await update.message.reply_text("Abhi tak koi user nahi hai.")
+        else:
+            list_str = "\n".join([f"• {name}" for name in user_registry.values()])
+            await update.message.reply_text(f"**Total Users: {len(user_registry)}**\n\n{list_str}", parse_mode="Markdown")
+            
+    elif text == "⚙️ Status":
+        await update.message.reply_text("Bot status: Online & Working perfectly! ✅")
 
 # --- MAIN ---
 if __name__ == "__main__":
@@ -60,6 +69,6 @@ if __name__ == "__main__":
     app.add_handler(CallbackQueryHandler(service_buttons, pattern="svc_"))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), admin_actions))
     
-    print("Bot is running...")
+    print("Bot is running successfully...")
     app.run_polling(drop_pending_updates=True)
     
