@@ -4,7 +4,6 @@ import time
 import threading
 import re
 import sys
-import random
 
 # =====================================================================
 # ⚙️ CONFIGURATION 
@@ -21,7 +20,6 @@ if not API_TOKEN:
     sys.exit(1)
 
 BASE_URL = f"https://api.telegram.org/bot{API_TOKEN}"
-EMOJI_POOL = ["🔥", "🚀", "👍", "❤️", "⚡", "🎉", "🤩"]
 
 def init_db():
     conn = sqlite3.connect("gold_expert_premium.db", timeout=20)
@@ -303,7 +301,7 @@ VIP Membership Packages
 - 📆 1 Month: $300
 - 📈 1 Week: $100
 
-You can judge our trading accuracy by following our Free Signals Channel before upgrading."""
+ You can judge our trading accuracy by following our Free Signals Channel before upgrading."""
 
     def_copy_text = """📋 Copy Trading Terms & Conditions
 
@@ -321,7 +319,6 @@ Copy Trading Fee
 
 There are no monthly fees, no profit-sharing, and no hidden commissions. After paying the one-time fee, you can use our Copy Trading Service without any additional service charges."""
 
-    # Dynamic Owner Interface Redirection Override
     if data.startswith("edt_") and from_user_id == OWNER_ID:
         action = data.split("_")[1]
         if action == "cancel":
@@ -341,7 +338,6 @@ There are no monthly fees, no profit-sharing, and no hidden commissions. After p
         requests.post(f"{BASE_URL}/editMessageText", json={"chat_id": chat_id, "message_id": message_id, "text": f"📥 **System Ready!**\n\nSend the new raw string message now to overwrite `{action}` completely down in the server database.", "parse_mode": "Markdown"})
         return
 
-    # Advanced Operational CRM Tracking Actions
     if data.startswith("adm_view_") and from_user_id == OWNER_ID:
         t_uid = int(data.split("_")[2])
         conn = sqlite3.connect("gold_expert_premium.db", timeout=20)
@@ -367,7 +363,6 @@ There are no monthly fees, no profit-sharing, and no hidden commissions. After p
         requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": OWNER_ID, "text": history_text, "parse_mode": "Markdown"})
         return
 
-    # User Navigation Interface Flows
     if data == "srv_account":
         log_user_history(from_user_id, "NAVIGATE", "Looked up Account Management Details")
         txt = get_content("account", def_account_text)
@@ -410,3 +405,7 @@ There are no monthly fees, no profit-sharing, and no hidden commissions. After p
 
 def auto_request_approver():
     while True:
+        try:
+            conn = sqlite3.connect("gold_expert_premium.db", timeout=20)
+            cursor = conn.cursor()
+            cursor.execute("SELECT user_id, chat_id FROM pending_channel_requests")
