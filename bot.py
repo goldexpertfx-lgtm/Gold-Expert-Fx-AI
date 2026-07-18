@@ -9,7 +9,7 @@ import random
 # =====================================================================
 # ⚙️ CONFIGURATION 
 # =====================================================================
-API_TOKEN = "8851943854:AAGfy9xw9srlQCE5g_yH0hMYqjPsI5NC-e4"  # ⚠️ Apne bot ka real Telegram Token yahan dalein
+API_TOKEN = ""  # ⚠️ Apne bot ka real Telegram Token yahan dalein
 OWNER_ID = 7415265825  # 👑 Prince Bhai Admin ID Locked
 
 FREE_GROUP_ID = -4477244119  # Gold Expert Fx Community
@@ -216,11 +216,8 @@ def handle_incoming_message(msg):
             if row:
                 target_id = row[0]
                 payload = {"chat_id": target_id, "text": f"💬 **Message from Admin:**\n\n{text}", "parse_mode": "Markdown"}
-                res = requests.post(f"{BASE_URL}/sendMessage", json={
-                    "chat_id": OWNER_ID, 
-                    "text": "⏳ **Format Received Successfully!**\n\nPlease wait while our team reviews your trading details and initializes your connection. We will notify you here directly.",
-                    "parse_mode": "Markdown"
-                })
+                requests.post(f"{BASE_URL}/sendMessage", json=payload)
+                requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": OWNER_ID, "text": "✅ Reply delivered successfully to client."})
                 return
 
         if text and text.startswith("/start"):
@@ -242,11 +239,7 @@ def handle_incoming_message(msg):
                 payload["reply_markup"] = get_owner_menu()
                 requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": chat_id, "text": f"👑 Welcome Back Prince Bhai. Admin menu activated below.", "reply_markup": get_owner_menu()})
             
-            requests.post(f"{BASE_URL}/sendMessage", json={
-                "chat_id": OWNER_ID, 
-                "text": "⏳ **Format Received Successfully!**\n\nPlease wait while our team reviews your trading details and initializes your connection. We will notify you here directly.",
-                "parse_mode": "Markdown"
-            })
+            requests.post(f"{BASE_URL}/sendMessage", json=payload)
             return
 
         if text and from_user_id != OWNER_ID:
@@ -459,4 +452,10 @@ If you have any questions or need more information, feel free to contact our sup
         cursor.execute("INSERT OR REPLACE INTO admin_edit_state VALUES (?, ?)", (OWNER_ID, action))
         conn.commit()
         conn.close()
-        requests.post(f"{BASE_URL}/editMessageText", json={"chat_id"
+        requests.post(f"{BASE_URL}/editMessageText", json={"chat_id": chat_id, "message_id": message_id, "text": f"📥 **Ready to edit `{action}` content.**\n\nSend the whole new message now to update the database live.", "parse_mode": "Markdown"})
+        return
+
+    if data == "srv_account":
+        log_user_history(from_user_id, "NAVIGATE", "Viewed Account Management Rules")
+        text_payload = get_content("account", def_account_text)
+        kb = {"inline_keyboard": [[{"text": "🚀 Join Service
