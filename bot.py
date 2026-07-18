@@ -245,7 +245,7 @@ def handle_incoming_message(msg):
             requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": OWNER_ID, "text": admin_alert, "parse_mode": "Markdown"})
 
     # Auto reactions for Admin posts in community
-    if chat_id == FREE_GROUP_ID and_user_id == OWNER_ID:
+    if chat_id == FREE_GROUP_ID and from_user_id == OWNER_ID:
         threading.Thread(target=lambda: requests.post(f"{BASE_URL}/setMessageReaction", json={
             "chat_id": chat_id, "message_id": message_id, 
             "reaction": [{"type": "emoji", "emoji": random.choice(EMOJI_POOL)}]}
@@ -377,4 +377,4 @@ def handle_callback_query(callback):
     if data == "srv_account":
         log_user_history(from_user_id, "NAVIGATE", "Viewed Account Management Rules")
         kb = {"inline_keyboard": [[{"text": "🚀 Join Service Now", "callback_data": "join_account"}]]}
-        requests.post(f"{BASE_URL}/editMessageText", json={"chat_id": chat_id, "messag
+        requests.post(f"{BASE_URL}/editMessageText", json={"chat_id": chat_id, "m
