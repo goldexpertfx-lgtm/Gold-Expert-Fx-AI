@@ -9,7 +9,7 @@ import sys
 # ⚙️ CONFIGURATION 
 # =====================================================================
 API_TOKEN = "8851943854:AAGfy9xw9srlQCE5g_yH0hMYqjPsI5NC-e4"  # ⚠️ Apna real Telegram Token yahan dalein
-OWNER_ID = 7415265825  # 👑 Prince Bhai Admin ID
+OWNER_ID = 7415265825  # 👑 Admin ID
 
 FREE_GROUP_ID = -4477244119  
 PRIVATE_CHANNEL_ID = -3870933647  
@@ -26,42 +26,11 @@ def init_db():
     cursor = conn.cursor()
     cursor.execute("CREATE TABLE IF NOT EXISTS member_activity (user_id INTEGER PRIMARY KEY, leave_timestamp REAL)")
     cursor.execute("CREATE TABLE IF NOT EXISTS pending_channel_requests (user_id INTEGER, chat_id INTEGER, request_time REAL, PRIMARY KEY (user_id, chat_id))")
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS users_profile (
-            user_id INTEGER PRIMARY KEY,
-            first_name TEXT,
-            username TEXT,
-            join_date REAL
-        )
-    """)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS user_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            action_type TEXT,
-            details TEXT,
-            timestamp REAL
-        )
-    """)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS admin_state (
-            admin_id INTEGER PRIMARY KEY,
-            target_user_id INTEGER
-        )
-    """)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS dynamic_content (
-            service_key TEXT PRIMARY KEY,
-            text_content TEXT
-        )
-    """)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS admin_edit_state (
-            admin_id INTEGER PRIMARY KEY,
-            editing_service TEXT
-        )
-    """)
+    cursor.execute("CREATE TABLE IF NOT EXISTS users_profile (user_id INTEGER PRIMARY KEY, first_name TEXT, username TEXT, join_date REAL)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS user_history (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, action_type TEXT, details TEXT, timestamp REAL)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS admin_state (admin_id INTEGER PRIMARY KEY, target_user_id INTEGER)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS dynamic_content (service_key TEXT PRIMARY KEY, text_content TEXT)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS admin_edit_state (admin_id INTEGER PRIMARY KEY, editing_service TEXT)")
     conn.commit()
     conn.close()
 
@@ -74,8 +43,10 @@ def get_content(service_key, default_text):
         cursor.execute("SELECT text_content FROM dynamic_content WHERE service_key = ?", (service_key,))
         row = cursor.fetchone()
         conn.close()
-        if row and row[0]: return row[0]
-    except Exception: pass
+        if row and row[0]: 
+            return row[0]
+    except Exception: 
+        pass
     return default_text
 
 def set_content(service_key, new_text):
@@ -86,17 +57,18 @@ def set_content(service_key, new_text):
         conn.commit()
         conn.close()
         return True
-    except Exception: return False
+    except Exception: 
+        return False
 
 def log_user_history(user_id, action_type, details):
     try:
         conn = sqlite3.connect("gold_expert_premium.db", timeout=20)
         cursor = conn.cursor()
-        cursor.execute("INSERT INTO user_history (user_id, action_type, details, timestamp) VALUES (?, ?, ?, ?)",
-                       (user_id, action_type, details, time.time()))
+        cursor.execute("INSERT INTO user_history (user_id, action_type, details, timestamp) VALUES (?, ?, ?, ?)", (user_id, action_type, details, time.time()))
         conn.commit()
         conn.close()
-    except Exception: pass
+    except Exception: 
+        pass
 
 def get_main_keyboard():
     return {
@@ -109,9 +81,7 @@ def get_main_keyboard():
 
 def get_owner_menu():
     return {
-        "keyboard": [
-            [{"text": "👥 View Total Users"}, {"text": "✏️ Live Edit Messages"}]
-        ],
+        "keyboard": [[{"text": "👥 View Total Users"}, {"text": "✏️ Live Edit Messages"}]],
         "resize_keyboard": True,
         "one_time_keyboard": False
     }
@@ -124,7 +94,8 @@ def handle_incoming_message(msg):
     from_user_id = from_user.get("id")
     chat_type = msg.get("chat", {}).get("type")
     
-    if not from_user_id: return
+    if not from_user_id: 
+        return
 
     if "new_chat_members" in msg or "left_chat_member" in msg:
         requests.post(f"{BASE_URL}/deleteMessage", json={"chat_id": chat_id, "message_id": message_id})
@@ -137,7 +108,8 @@ def handle_incoming_message(msg):
                 cursor.execute("INSERT OR REPLACE INTO member_activity VALUES (?, ?)", (left_id, time.time()))
                 conn.commit()
                 conn.close()
-            except Exception: pass
+            except Exception: 
+                pass
         return
 
     if text and chat_id == FREE_GROUP_ID and from_user_id != OWNER_ID:
@@ -151,11 +123,11 @@ def handle_incoming_message(msg):
         try:
             conn = sqlite3.connect("gold_expert_premium.db", timeout=20)
             cursor = conn.cursor()
-            cursor.execute("INSERT OR IGNORE INTO users_profile VALUES (?, ?, ?, ?)", 
-                           (from_user_id, from_user.get("first_name"), from_user.get("username"), time.time()))
+            cursor.execute("INSERT OR IGNORE INTO users_profile VALUES (?, ?, ?, ?)", (from_user_id, from_user.get("first_name"), from_user.get("username"), time.time()))
             conn.commit()
             conn.close()
-        except Exception: pass
+        except Exception: 
+            pass
 
         if text and text.startswith("/start"):
             log_user_history(from_user_id, "COMMAND", "/start target triggered")
@@ -199,12 +171,10 @@ def handle_incoming_message(msg):
                 requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": OWNER_ID, "text": "🛠️ **Prince Bhai, select the post content you want to modify live:**", "reply_markup": kb})
                 return
 
-            # Handle incoming edit texts or active chatbox replies
             conn = sqlite3.connect("gold_expert_premium.db", timeout=20)
             cursor = conn.cursor()
             cursor.execute("SELECT editing_service FROM admin_edit_state WHERE admin_id = ?", (OWNER_ID,))
             edit_row = cursor.fetchone()
-            
             cursor.execute("SELECT target_user_id FROM admin_state WHERE admin_id = ?", (OWNER_ID,))
             target_row = cursor.fetchone()
             conn.close()
@@ -247,77 +217,9 @@ def handle_callback_query(callback):
     
     requests.post(f"{BASE_URL}/answerCallbackQuery", json={"callback_query_id": c_id})
 
-    # Massive Restored Formats
-    def_account_text = """Account Management Service – Terms & Rules
-
-Please read the following terms carefully before joining our Account Management Service.
-
-1. Trading Account
-You will provide your MT4 or MT5 login details so we can manage your trading account professionally.
-
-2. Fund Security
-Your funds always remain in your own trading account. We cannot deposit, withdraw, or transfer your money. Only you have full control over your funds.
-
-3. Profit Sharing
-All trading profits will be shared 50% for you and 50% for us.
-
-4. Loss Sharing
-If a trading loss occurs, the loss will also be shared 50/50. Since we receive 50% of the profit, we also accept 50% of the trading loss.
-
-5. Profit Payment
-After profit is generated, we will notify you. You can then send our 50% profit share using any of the payment methods listed below.
-
-6. No Scam
-This is a transparent and honest service. There are no hidden charges, no scams, and no fake promises.
-
-7. No Long-Term Commitment
-You are free to start or stop the service at any time. There is no pressure or obligation to continue working with us.
-
-Accepted Brokers
-✅ All Brokers Accepted
-
-Accepted Payment Methods
-- Binance / USDT
-- Skrill / Neteller
-- Bitcoin (BTC) / Crypto
-- Perfect Money / WebMoney
-
-Thank you for choosing our Account Management Service."""
-
-    def_vip_text = """Join Our VIP Premium Group
-
-If you ever miss our free signals or want more trading opportunities with higher consistency, you can join our VIP Premium Group.
-
-What You Get:
-- ✅ 5–7 XAUUSD signals daily
-- ✅ High-accuracy trade setups
-- ✅ Point-by-point trade updates
-- ✅ Entry, Take Profit & Stop Loss levels
-- ✅ Market analysis & chart analysis
-
-VIP Membership Packages
-- 💎 Lifetime Access: $700 (One-Time Payment)
-- 📅 1 Year: $500
-- 📆 1 Month: $300
-- 📈 1 Week: $100
-
-You can judge our trading accuracy by following our Free Signals Channel before upgrading."""
-
-    def_copy_text = """📋 Copy Trading Terms & Conditions
-
-Gold Expert FX | Copy Trading Rules
-
-1. Account Requirement
-- Client ke paas MT4 ya MT5 trading account hona chahiye.
-- Recommended minimum deposit: $200 ya us se zyada.
-
-2. No Deposit Withdrawal
-- Hum kabhi bhi client ke account se funds withdraw nahi kar sakte. Only you hold structural access.
-
-Copy Trading Fee
-💰 One-Time Payment: $1,000
-
-There are no monthly fees, no profit-sharing, and no hidden commissions. After paying the one-time fee, you can use our Copy Trading Service without any additional service charges."""
+    def_account_text = """Account Management Service – Terms & Rules\n\nPlease read the following terms carefully before joining our Account Management Service.\n\n1. Trading Account\nYou will provide your MT4 or MT5 login details so we can manage your trading account professionally.\n\n2. Fund Security\nYour funds always remain in your own trading account. We cannot deposit, withdraw, or transfer your money. Only you have full control over your funds.\n\n3. Profit Sharing\nAll trading profits will be shared 50% for you and 50% for us.\n\n4. Loss Sharing\nIf a trading loss occurs, the loss will also be shared 50/50. Since we receive 50% of the profit, we also accept 50% of the trading loss.\n\n5. Profit Payment\nAfter profit is generated, we will notify you. You can then send our 50% profit share using any of the payment methods listed below.\n\n6. No Scam\nThis is a transparent and honest service. There are no hidden charges, no scams, and no fake promises.\n\n7. No Long-Term Commitment\nYou are free to start or stop the service at any time. There is no pressure or obligation to continue working with us.\n\nAccepted Brokers\n✅ All Brokers Accepted\n\nAccepted Payment Methods\n- Binance / USDT\n- Skrill / Neteller\n- Bitcoin (BTC) / Crypto\n- Perfect Money / WebMoney\n\nThank you for choosing our Account Management Service."""
+    def_vip_text = """Join Our VIP Premium Group\n\nIf you ever miss our free signals or want more trading opportunities with higher consistency, you can join our VIP Premium Group.\n\nWhat You Get:\n- ✅ 5–7 XAUUSD signals daily\n- ✅ High-accuracy trade setups\n- ✅ Point-by-point trade updates\n- ✅ Entry, Take Profit & Stop Loss levels\n- ✅ Market analysis & chart analysis\n\nVIP Membership Packages\n- 💎 Lifetime Access: $700 (One-Time Payment)\n- 📅 1 Year: $500\n- 📆 1 Month: $300\n- 📈 1 Week: $100\n\nYou can judge our trading accuracy by following our Free Signals Channel before upgrading."""
+    def_copy_text = """📋 Copy Trading Terms & Conditions\n\nGold Expert FX | Copy Trading Rules\n\n1. Account Requirement\n- Client ke paas MT4 ya MT5 trading account hona chahiye.\n- Recommended minimum deposit: $200 ya us se zyada.\n\n2. No Deposit Withdrawal\n- Hum kabhi bhi client ke account se funds withdraw nahi kar sakte. Only you hold structural access.\n\nCopy Trading Fee\n💰 One-Time Payment: $1,000\n\nThere are no monthly fees, no profit-sharing, and no hidden commissions. After paying the one-time fee, you can use our Copy Trading Service without any additional service charges."""
 
     if data.startswith("edt_") and from_user_id == OWNER_ID:
         action = data.split("_")[1]
@@ -350,7 +252,8 @@ There are no monthly fees, no profit-sharing, and no hidden commissions. After p
         conn.commit()
         conn.close()
         
-        if not prof: return
+        if not prof: 
+            return
         history_text = f"⚙️ **User Chatbox & Historical Activity Logs:**\n👤 **Name:** {prof[0]}\n🆔 **ID:** `{t_uid}`\n🌐 **User:** @{prof[1] if prof[1] else 'None'}\n\n📝 **Timeline Tracking Trace:**\n"
         if not logs:
             history_text += "_No previous footprints logged for this user profile._"
@@ -367,7 +270,8 @@ There are no monthly fees, no profit-sharing, and no hidden commissions. After p
         log_user_history(from_user_id, "NAVIGATE", "Looked up Account Management Details")
         txt = get_content("account", def_account_text)
         kb = {"inline_keyboard": [[{"text": "🚀 Join Service Now", "callback_data": "join_account"}]]}
-        if from_user_id == OWNER_ID: kb["inline_keyboard"].append([{"text": "⚡ Direct Edit Post Content", "callback_data": "edt_account"}])
+        if from_user_id == OWNER_ID: 
+            kb["inline_keyboard"].append([{"text": "⚡ Direct Edit Post Content", "callback_data": "edt_account"}])
         requests.post(f"{BASE_URL}/editMessageText", json={"chat_id": chat_id, "message_id": message_id, "text": txt, "parse_mode": "Markdown", "reply_markup": kb})
 
     elif data == "join_account":
@@ -379,7 +283,8 @@ There are no monthly fees, no profit-sharing, and no hidden commissions. After p
         log_user_history(from_user_id, "NAVIGATE", "Viewed VIP Packages Structure")
         txt = get_content("vip", def_vip_text)
         kb = {"inline_keyboard": [[{"text": "💎 Join VIP Premium", "callback_data": "join_vip_packages"}]]}
-        if from_user_id == OWNER_ID: kb["inline_keyboard"].append([{"text": "⚡ Direct Edit Post Content", "callback_data": "edt_vip"}])
+        if from_user_id == OWNER_ID: 
+            kb["inline_keyboard"].append([{"text": "⚡ Direct Edit Post Content", "callback_data": "edt_vip"}])
         requests.post(f"{BASE_URL}/editMessageText", json={"chat_id": chat_id, "message_id": message_id, "text": txt, "parse_mode": "Markdown", "reply_markup": kb})
 
     elif data == "join_vip_packages":
@@ -396,7 +301,8 @@ There are no monthly fees, no profit-sharing, and no hidden commissions. After p
         log_user_history(from_user_id, "NAVIGATE", "Opened Copy Trading Terms Summary")
         txt = get_content("copy", def_copy_text)
         kb = {"inline_keyboard": [[{"text": "📋 Connect Copy Trading Service", "callback_data": "pay_wait"}]]}
-        if from_user_id == OWNER_ID: kb["inline_keyboard"].append([{"text": "⚡ Direct Edit Post Content", "callback_data": "edt_copy"}])
+        if from_user_id == OWNER_ID: 
+            kb["inline_keyboard"].append([{"text": "⚡ Direct Edit Post Content", "callback_data": "edt_copy"}])
         requests.post(f"{BASE_URL}/editMessageText", json={"chat_id": chat_id, "message_id": message_id, "text": txt, "parse_mode": "Markdown", "reply_markup": kb})
 
     elif data == "pay_wait":
@@ -409,4 +315,9 @@ def check_and_approve():
         cursor = conn.cursor()
         cursor.execute("SELECT user_id, chat_id FROM pending_channel_requests")
         reqs = cursor.fetchall()
-   
+        conn.close()
+        for uid, cid in reqs:
+            status = requests.post(f"{BASE_URL}/approveChatJoinRequest", json={"chat_id": cid, "user_id": uid}).json()
+            if status.get("ok"):
+                log_user_history(uid, "APPROVAL", "Channel Access Approved Automatically")
+                conn = sqlite3.conne
