@@ -100,7 +100,6 @@ def verify_and_ping_double_leave(user_id):
         conn.close()
 
         if g_row and c_row:
-            # User has left both platforms! Send inquiry text
             leave_msg = (
                 "👋 Hello, Trader!\n\n"
                 "We noticed that you have left both our **Gold Expert Fx Community** and **VIP Premium Signals Channel**.\n\n"
@@ -110,7 +109,6 @@ def verify_and_ping_double_leave(user_id):
             requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": user_id, "text": leave_msg, "parse_mode": "Markdown"})
             log_user_history(user_id, "LEAVE_FEEDBACK_SENT", "Sent double leave inquiry to user inbox")
             
-            # Clean records so it doesn't spam
             conn = sqlite3.connect("new_join_filter_bot.db", timeout=20)
             cursor = conn.cursor()
             cursor.execute("DELETE FROM group_leaves WHERE user_id = ?", (user_id,))
@@ -128,11 +126,9 @@ def handle_incoming_message(msg):
     from_user_id = from_user.get("id")
     chat_type = msg.get("chat", {}).get("type")
     
-    # 🚫 Handle System Cleanups (Joins/Leaves message deletion)
     if "new_chat_members" in msg or "left_chat_member" in msg:
         requests.post(f"{BASE_URL}/deleteMessage", json={"chat_id": chat_id, "message_id": message_id})
         
-        # Track Group Leave specifically
         if chat_id == FREE_GROUP_ID and "left_chat_member" in msg:
             left_user_id = msg["left_chat_member"]["id"]
             try:
@@ -146,7 +142,6 @@ def handle_incoming_message(msg):
             except Exception: pass
         return
 
-    # 🌐 LINK DELETION ENGINE (Community Group Safety)
     if text and chat_id == FREE_GROUP_ID:
         url_pattern = r'(https?://[^\s]+|www\.[^\s]+|\bt\.me/[^\s]+|[a-zA-r0-9\-\.]+\.(com|net|org|xyz|info|co))'
         if re.search(url_pattern, text, re.IGNORECASE):
@@ -154,7 +149,6 @@ def handle_incoming_message(msg):
                 requests.post(f"{BASE_URL}/deleteMessage", json={"chat_id": chat_id, "message_id": message_id})
                 return
 
-    # 📥 PRIVATE CHAT FLOW
     if chat_type == "private":
         try:
             conn = sqlite3.connect("new_join_filter_bot.db", timeout=20)
@@ -165,7 +159,6 @@ def handle_incoming_message(msg):
             conn.close()
         except Exception: pass
 
-        # 👑 Handle Admin Keyboard Click (View Users List)
         if from_user_id == OWNER_ID and text == "👥 View All Users (Admin Panel)":
             conn = sqlite3.connect("new_join_filter_bot.db", timeout=20)
             cursor = conn.cursor()
@@ -183,11 +176,13 @@ def handle_incoming_message(msg):
                 kb["inline_keyboard"].append([{"text": f"👤 {disp}", "callback_data": f"adm_view_{u_id}"}])
             
             requests.post(f"{BASE_URL}/sendMessage", json={
-                "chat_id": OWNER_ID, "text": "👥 **Select a user to view full log details & open direct chat box:**", "parse_mode": "Markdown", "reply_markup": kb
+                "chat_id": OWNER_ID, 
+                "text": "👥 **Select a user to view full log details & open direct chat box:**", 
+                "parse_mode": "Markdown", 
+                "reply_markup": kb
             })
             return
 
-        # 👑 Admin Routing System (Replies to users)
         if from_user_id == OWNER_ID and text and not text.startswith("/"):
             conn = sqlite3.connect("new_join_filter_bot.db", timeout=20)
             cursor = conn.cursor()
@@ -205,7 +200,6 @@ def handle_incoming_message(msg):
                     requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": OWNER_ID, "text": "❌ Delivery failed. User may have blocked the bot."})
                 return
 
-        # Standard /start Command
         if text and text.startswith("/start"):
             log_user_history(from_user_id, "COMMAND", "/start executed")
             name = from_user.get("first_name", "Trader")
@@ -220,12 +214,11 @@ def handle_incoming_message(msg):
             
             payload = {"chat_id": chat_id, "text": welcome, "parse_mode": "Markdown", "reply_markup": get_main_keyboard()}
             if from_user_id == OWNER_ID:
-                requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": chat_id, "text": f"👑 Welcome Back Prince Bhai. Admin menu activated below.", "reply_markup": get_owner_menu()})
+                requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": chat_id, "text": "👑 Welcome Back Prince Bhai. Admin menu activated below.", "reply_markup": get_owner_menu()})
             
             requests.post(f"{BASE_URL}/sendMessage", json=payload)
             return
 
-        # Handle regular format or text submissions from users
         if text and from_user_id != OWNER_ID:
             log_user_history(from_user_id, "USER_MESSAGE", text)
             
@@ -244,7 +237,6 @@ def handle_incoming_message(msg):
             )
             requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": OWNER_ID, "text": admin_alert, "parse_mode": "Markdown"})
 
-    # Auto reactions for Admin posts in community
     if chat_id == FREE_GROUP_ID and from_user_id == OWNER_ID:
         threading.Thread(target=lambda: requests.post(f"{BASE_URL}/setMessageReaction", json={
             "chat_id": chat_id, "message_id": message_id, 
@@ -262,7 +254,6 @@ def handle_callback_query(callback):
     
     requests.post(f"{BASE_URL}/answerCallbackQuery", json={"callback_query_id": c_id})
     
-    # 📑 TEXT DATA STRINGS
     account_management_text = (
         "Account Management Service – Terms & Rules\n\n"
         "Please read the following terms carefully before joining our Account Management Service.\n\n"
@@ -373,8 +364,25 @@ def handle_callback_query(callback):
         "If you have any questions or need more information, feel free to contact our support team. We will be happy to assist you with the registration and setup process."
     )
 
-    # 🔗 EXECUTIVE SWITCHBOARD (Modifying states via editMessageText)
+    # Clean multi-line structure to ensure text never cuts off mid-string
     if data == "srv_account":
         log_user_history(from_user_id, "NAVIGATE", "Viewed Account Management Rules")
         kb = {"inline_keyboard": [[{"text": "🚀 Join Service Now", "callback_data": "join_account"}]]}
-        requests.post(f"{BASE_URL}/editMessageText", json={"chat_id": chat_id, "m
+        payload = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": account_management_text,
+            "reply_markup": kb
+        }
+        requests.post(f"{BASE_URL}/editMessageText", json=payload)
+
+    elif data == "join_account":
+        log_user_history(from_user_id, "CLICK_BUTTON", "Clicked Join Account Management")
+        format_text = (
+            "1) Broker name -\n"
+            "2) Server name -\n"
+            "3) Platform - (MT4/MT5)\n"
+            "4) Deposit Amount - (Minimum $500)\n"
+            "5) Login ID -\n"
+            "6) Password -\n"
+ 
