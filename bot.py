@@ -1,89 +1,99 @@
 import os
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
 # --- Configuration ---
-TOKEN = os.environ.get("BOT_TOKEN") # Render ke Environment Variables mein BOT_TOKEN set karein
-ADMIN_ID = 7415265825 # Yahan apni Telegram ID dalen taaki notification mile
+TOKEN = os.environ.get("BOT_TOKEN")
+ADMIN_ID = 7415265825  # Aapki ID
 PARTNER_LINK = "https://www.brokeraccountguide.com/"
 SUPPORT_LINK = "https://t.me/MuhammadPrince7"
 
+# --- Data Stores ---
+user_registry = {}  # {user_id: user_info}
+reply_targets = {}  # {admin_id: target_user_id}
+
 logging.basicConfig(level=logging.INFO)
+
+# --- Admin Keyboard ---
+def get_admin_keyboard():
+    keyboard = [
+        [KeyboardButton("👥 Users List"), KeyboardButton("✏️ Edit Start Text")]
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
 
 # ===== START FUNCTION =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    welcome_text = (
-        f"**Hey, {user.first_name}!** 👋\n\n"
-        "Welcome to Broker Account Guide Bot!\n\n"
-        "Choose your status below:"
-    )
-    inline_kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🆕 New User", callback_data='new_here')],
-        [InlineKeyboardButton("🔄 Existing User", callback_data='old_here')],
-        [InlineKeyboardButton("🌐 From Website", callback_data='from_website')]
-    ])
-    
-    if update.callback_query:
-        await update.callback_query.edit_message_text(text=welcome_text, reply_markup=inline_kb, parse_mode="Markdown")
-    else:
-        await update.message.reply_text(text=welcome_text, reply_markup=inline_kb, parse_mode="Markdown")
+    user_registry[user.id] = user  # User ko list mein add kiya
 
-# ===== BUTTON HANDLER =====
-async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Admin check
+    if user.id == ADMIN_ID:
+        await update.message.reply_text("Welcome Admin, Gold Expert Fx Control Panel:", reply_markup=get_admin_keyboard())
+    else:
+        welcome_text = f"**Hey, {user.first_name}!** 👋\nWelcome to Broker Account Guide Bot!"
+        await update.message.reply_text(welcome_text, parse_mode="Markdown")
+
+# ===== ADMIN BUTTON HANDLERS =====
+async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    user = update.effective_user
+    if user.id != ADMIN_ID: return
+
+    if text == "👥 Users List":
+        buttons = []
+        for uid, uinfo in user_registry.items():
+            buttons.append([InlineKeyboardButton(f"{uinfo.first_name} (@{uinfo.username or 'NoUser'})", callback_data=f"user_{uid}")])
+        
+        await update.message.reply_text("Select a user to manage:", reply_markup=InlineKeyboardMarkup(buttons))
+
+    elif text == "✏️ Edit Start Text":
+        await update.message.reply_text("Feature coming soon! (Database update required)")
+
+# ===== USER DASHBOARD (Admin Only) =====
+async def user_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    data = query.data
-
-    if data == "start_again": await start(update, context)
     
-    elif data == "new_here":
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🚀 Join Now", url=PARTNER_LINK)], [InlineKeyboardButton("🔙 Back", callback_data="start_again")]])
-        await query.edit_message_text("Register using our partner link:", reply_markup=kb)
+    if query.data.startswith("user_"):
+        target_id = int(query.data.split("_")[1])
+        reply_targets[update.effective_user.id] = target_id # Admin ka target set kiya
+        uinfo = user_registry.get(target_id)
+        
+        msg = f"👤 **Dashboard: {uinfo.first_name}**\nID: `{target_id}`\n\nSend a message here, and I will forward it to the user."
+        await query.edit_message_text(msg, parse_mode="Markdown")
 
-    elif data == "old_here":
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("📩 Contact Support", url=SUPPORT_LINK)], [InlineKeyboardButton("🔙 Back", callback_data="start_again")]])
-        await query.edit_message_text("Need help? Contact support:", reply_markup=kb)
-
-    elif data == "from_website":
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ Registered", callback_data="registered"), InlineKeyboardButton("🔁 Changed IB", callback_data="changed_ib")],
-            [InlineKeyboardButton("🔙 Back", callback_data="start_again")]
-        ])
-        await query.edit_message_text("Select your status:", reply_markup=kb)
-
-    elif data in ["registered", "changed_ib"]:
-        msg = "✅ **Detail Received!**\n\nPlease send your **Trading Account ID** in this chat."
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="from_website")]])
-        await query.edit_message_text(msg, reply_markup=kb, parse_mode="Markdown")
-
-# ===== MESSAGE HANDLER (Notifications for Admin) =====
+# ===== MESSAGE HANDLER =====
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     text = update.message.text
+
+    # 1. Agar Admin kisi ko reply kar raha hai
+    if user.id == ADMIN_ID and user.id in reply_targets:
+        target_id = reply_targets[user.id]
+        try:
+            await context.bot.send_message(chat_id=target_id, text=f"📢 **Message from Admin:**\n\n{text}")
+            await update.message.reply_text("✅ Message sent to user!")
+        except:
+            await update.message.reply_text("❌ Could not send message (User might have blocked bot).")
+        return
+
+    # 2. General User flow (Save user and notify admin)
+    user_registry[user.id] = user
+    await update.message.reply_text("✅ Received! Our team will verify this shortly.")
     
-    # 1. User ko reply
-    await update.message.reply_text("✅ **Received!** Our team will verify your details shortly.")
-    
-    # 2. Admin (Prince) ko Notification bheje
-    notification = (
-        f"🔔 **New Message Received**\n\n"
-        f"👤 **User:** {user.first_name} (@{user.username})\n"
-        f"🆔 **ID:** `{user.id}`\n"
-        f"💬 **Content:** {text}"
-    )
+    # Notify Admin
     try:
-        await context.bot.send_message(chat_id=ADMIN_ID, text=notification, parse_mode="Markdown")
-    except Exception as e:
-        print(f"Failed to notify admin: {e}")
+        await context.bot.send_message(chat_id=ADMIN_ID, text=f"🔔 **New Msg from {user.first_name}**:\n{text}")
+    except: pass
 
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button))
+    app.add_handler(CallbackQueryHandler(user_dashboard))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), admin_actions)) # Keyboard buttons
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), message_handler))
     
     print("Bot is running...")
     app.run_polling()
-    
+        
