@@ -301,7 +301,7 @@ VIP Membership Packages
 - 📆 1 Month: $300
 - 📈 1 Week: $100
 
- You can judge our trading accuracy by following our Free Signals Channel before upgrading."""
+You can judge our trading accuracy by following our Free Signals Channel before upgrading."""
 
     def_copy_text = """📋 Copy Trading Terms & Conditions
 
@@ -409,3 +409,4 @@ def auto_request_approver():
             conn = sqlite3.connect("gold_expert_premium.db", timeout=20)
             cursor = conn.cursor()
             cursor.execute("SELECT user_id, chat_id FROM pending_channel_requests")
+    
