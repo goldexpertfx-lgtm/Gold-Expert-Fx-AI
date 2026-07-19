@@ -1,74 +1,61 @@
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
+import sqlite3
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters, ChatJoinRequestHandler, CallbackQueryHandler
 
-# --- CONFIGURATION ---
-# Apni ID yahan sahi se daalein
-TOKEN = '8851943854:AAGfy9xw9srlQCE5g_yH0hMYqjPsI5NC-e4' 
-ADMIN_ID = 7415265825          
+# Database Setup
+def init_db():
+    conn = sqlite3.connect('gold_expert_fx.db')
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, first_name TEXT)''')
+    conn.commit()
+    conn.close()
 
-# Database for users
-user_registry = {}
+# 1. Link Deletion (Community Management)
+async def filter_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message and update.message.entities:
+        for entity in update.message.entities:
+            if entity.type in ['url', 'text_link']:
+                await update.message.delete()
+                return
 
-# --- KEYBOARDS ---
-def get_user_menu():
-    keyboard = [
-        [InlineKeyboardButton("📊 Account Management", callback_data="svc_acc")],
-        [InlineKeyboardButton("💎 VIP Services", callback_data="svc_vip")],
-        [InlineKeyboardButton("📈 Copy Trading", callback_data="svc_copy")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
+# 2. Join Request Approval
+async def handle_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.chat_join_request.from_user
+    conn = sqlite3.connect('gold_expert_fx.db')
+    c = conn.cursor()
+    c.execute("INSERT OR IGNORE INTO users VALUES (?, ?)", (user.id, user.first_name))
+    conn.commit()
+    conn.close()
+    await context.bot.approve_chat_join_request(chat_id=update.chat_join_request.chat.id, user_id=user.id)
 
-def get_admin_keyboard():
-    keyboard = [["👥 Users List", "⚙️ Status"]]
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+# 3. User Tracking & Admin Reply
+async def list_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    conn = sqlite3.connect('gold_expert_fx.db')
+    c = conn.cursor()
+    c.execute("SELECT * FROM users")
+    users = c.fetchall()
+    conn.close()
+    msg = "👥 **Total Users List:**\n" + "\n".join([f"ID: {u[0]} | Name: {u[1]}" for u in users])
+    await update.message.reply_text(msg)
 
-# --- HANDLERS ---
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    # User ko save kar rahe hain (username agar na ho to 'N/A' save hoga)
-    user_registry[user.id] = user.username or user.first_name
+async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args) >= 2:
+        await context.bot.send_message(chat_id=context.args[0], text=f"📩 Admin: {' '.join(context.args[1:])}")
+
+# 4. Post & Button Management
+async def edit_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Aap yahan se apna custom message update kar sakte hain
+    await update.message.reply_text("Post updated successfully!")
+
+if __name__ == '__main__':
+    init_db()
+    app = ApplicationBuilder().token("YOUR_TELEGRAM_BOT_TOKEN").build()
     
-    welcome_text = f"**Welcome to Gold Expert Fx, {user.first_name}!** 🥇\n\nHum aapki trading journey ko professional banane ke liye yahan hain."
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), filter_links))
+    app.add_handler(ChatJoinRequestHandler(handle_join_request))
+    app.add_handler(CommandHandler("users", list_users))
+    app.add_handler(CommandHandler("reply", admin_reply))
+    app.add_handler(CommandHandler("edit", edit_post))
     
-    if user.id == ADMIN_ID:
-        await update.message.reply_text("Admin Panel Active:", reply_markup=get_admin_keyboard())
-    
-    await update.message.reply_text(welcome_text, parse_mode="Markdown", reply_markup=get_user_menu())
-
-async def service_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    responses = {
-        "svc_acc": "🛠 **Account Management:**\nHum aapke account ko expert levels par manage karte hain. Contact: @MuhammadPrince7",
-        "svc_vip": "💎 **VIP Services:**\nExclusive signals aur daily market analysis ke liye hamara VIP group join karein.",
-        "svc_copy": "📈 **Copy Trading:**\nHamare trades ko auto-copy karein. Join link: https://www.brokeraccountguide.com/"
-    }
-    await query.edit_message_text(responses.get(query.data, "Service unavailable."), parse_mode="Markdown")
-
-async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    if update.effective_user.id != ADMIN_ID: 
-        return
-
-    if text == "👥 Users List":
-        if not user_registry:
-            await update.message.reply_text("Abhi tak koi user nahi hai.")
-        else:
-            list_str = "\n".join([f"• {name}" for name in user_registry.values()])
-            await update.message.reply_text(f"**Total Users: {len(user_registry)}**\n\n{list_str}", parse_mode="Markdown")
-            
-    elif text == "⚙️ Status":
-        await update.message.reply_text("Bot status: Online & Working perfectly! ✅")
-
-# --- MAIN ---
-if __name__ == "__main__":
-    app = ApplicationBuilder().token(TOKEN).build()
-    
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(service_buttons, pattern="svc_"))
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), admin_actions))
-    
-    print("Bot is running successfully...")
-    app.run_polling(drop_pending_updates=True)
+    app.run_polling()
     
