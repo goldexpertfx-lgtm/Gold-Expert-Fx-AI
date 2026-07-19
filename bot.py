@@ -1,6 +1,6 @@
 import sqlite3
 import os
-from telegram import Update
+from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ChatJoinRequestHandler, ContextTypes
 
 # 1. Database Setup
@@ -11,19 +11,35 @@ def init_db():
     conn.commit()
     conn.close()
 
-# 2. Start Command - Jo bot ko active karega
+# 2. Start with Custom Keyboard
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Assalam-o-Alaikum! Gold Expert FX AI Bot active hai. 🚀")
+    keyboard = [['Edit Post', 'Edit Button']]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    await update.message.reply_text("Gold Expert FX AI Bot active hai:", reply_markup=reply_markup)
 
-# 3. Link Deletion
-async def filter_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message and update.message.entities:
-        for entity in update.message.entities:
-            if entity.type in ['url', 'text_link']:
-                await update.message.delete()
-                return
+# 3. Button Handler
+async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    if text == 'Edit Post':
+        await update.message.reply_text("Post edit karne ke liye text bhejein (Format: /editpost <content>)")
+    elif text == 'Edit Button':
+        await update.message.reply_text("Button edit karne ke liye link bhejein (Format: /editlink <url>)")
+    else:
+        # Link Deletion logic agar koi link bheje
+        if update.message.entities:
+            for entity in update.message.entities:
+                if entity.type in ['url', 'text_link']:
+                    await update.message.delete()
+                    return
 
-# 4. Join Request Approval
+# 4. Command Handlers
+async def edit_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Post update kar di gayi hai!")
+
+async def edit_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Button link update ho gaya hai!")
+
+# 5. Join Request & Users
 async def handle_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.chat_join_request.from_user
     conn = sqlite3.connect('gold_expert_fx.db')
@@ -33,31 +49,15 @@ async def handle_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE
     conn.close()
     await context.bot.approve_chat_join_request(chat_id=update.chat_join_request.chat.id, user_id=user.id)
 
-# 5. User List
-async def list_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    conn = sqlite3.connect('gold_expert_fx.db')
-    c = conn.cursor()
-    c.execute("SELECT * FROM users")
-    users = c.fetchall()
-    conn.close()
-    msg = "👥 **Total Users List:**\n" + "\n".join([f"ID: {u[0]} | Name: {u[1]}" for u in users])
-    await update.message.reply_text(msg)
-
-# 6. Admin Reply
-async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if len(context.args) >= 2:
-        await context.bot.send_message(chat_id=context.args[0], text=f"📩 Admin: {' '.join(context.args[1:])}")
-
-# Bot Start Main
 if __name__ == '__main__':
     init_db()
-    TOKEN = os.environ.get("BOT_TOKEN") # Render mein Environment variable set rakhein
+    TOKEN = os.environ.get("BOT_TOKEN")
     app = ApplicationBuilder().token(TOKEN).build()
     
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("users", list_users))
-    app.add_handler(CommandHandler("reply", admin_reply))
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), filter_links))
+    app.add_handler(CommandHandler("editpost", edit_post))
+    app.add_handler(CommandHandler("editlink", edit_link))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_buttons))
     app.add_handler(ChatJoinRequestHandler(handle_join_request))
     
     print("Bot is running...")
