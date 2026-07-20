@@ -15,7 +15,8 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 
 # 1. Start Command
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Welcome to Gold Expert Fx! Aapka message hamein mil gaya hai, hum jald hi reply karenge.")
+    await update.message.reply_text("Welcome to Gold Expert Fx! We have received your message and will reply as soon as possible.
+Thank you!")
 
 # 2. User to Admin Relay
 async def forward_to_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
