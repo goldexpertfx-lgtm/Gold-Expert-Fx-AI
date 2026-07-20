@@ -1,69 +1,78 @@
 import logging
 from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler, 
-    ChatJoinRequestHandler, filters, ContextTypes
-)
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ChatJoinRequestHandler, filters, ContextTypes
 
-# --- CONFIGURATION (Yahan apni Details daalein) ---
+# --- CONFIGURATION ---
 BOT_TOKEN = "8851943854:AAGfy9xw9srlQCE5g_yH0hMYqjPsI5NC-e4"
-ADMIN_ID = 7415265825  # Apni Telegram ID yahan likhein
-COMMUNITY_ID = -4477244119  # Gold Expert Fx Community ID
-PRIVATE_CHANNEL_ID = -3870933647 # Private Channel ID
+ADMIN_ID = 7415265825  # Apni ID
+COMMUNITY_ID = -4477244119 # Community Channel ID
+PRIVATE_ID = -3870933647   # Private Channel ID
+OWNER_LINK = "https://t.me/GoldExpertFxCommunity"
 
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+logging.basicConfig(level=logging.INFO)
 
-# 1. Start Command
+# --- DATABASE (Simple Memory) ---
+# Yahan hum store karenge ki kaun community mein hai
+community_members = set()
+
+# --- 1. START & WELCOME ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Welcome to Gold Expert Fx! We have received your message and will reply as soon as possible.
-Thank you!")
+    user = update.effective_user
+    # Admin ko notification
+    await context.bot.send_message(
+        chat_id=ADMIN_ID,
+        text=f"🆕 New User Started Bot:\nName: {user.full_name}\nUsername: @{user.username}\nID: {user.id}"
+    )
+    # User ko Welcome
+    await update.message.reply_text("✨ Bismillah! Gold Expert Fx mein khush amdeed. Aapka message humein mil gaya hai, hum jald raabta karenge.")
 
-# 2. User to Admin Relay
-async def forward_to_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.id != ADMIN_ID:
-        # User ka message Admin ko forward karein
-        await context.bot.forward_message(
-            chat_id=ADMIN_ID,
-            from_chat_id=update.effective_chat.id,
-            message_id=update.message.message_id
-        )
-
-# 3. Admin to User Reply
-async def reply_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.id == ADMIN_ID and update.message.reply_to_message:
-        # Reply ko original user ko send karein
-        target_user_id = update.message.reply_to_message.forward_from.id
-        await context.bot.send_message(chat_id=target_user_id, text=update.message.text)
-
-# 4. Join Request (7-hour Delay)
+# --- 2. JOIN REQUEST LOGIC ---
 async def handle_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.chat_join_request.user_id
-    # 7 ghante = 25200 seconds
-    context.job_queue.run_once(approve_user, 25200, data={'user_id': user_id, 'chat_id': update.chat_join_request.chat.id})
+    chat_id = update.chat_join_request.chat.id
+
+    if chat_id == PRIVATE_ID:
+        # Check agar user Community mein hai
+        if user_id in community_members:
+            # Community mein hai toh 7h ka wait
+            context.job_queue.run_once(approve_user, 25200, data={'user_id': user_id, 'chat_id': chat_id})
+        else:
+            # Nahi hai toh instant approve
+            await context.bot.approve_chat_join_request(chat_id=chat_id, user_id=user_id)
 
 async def approve_user(context: ContextTypes.DEFAULT_TYPE):
     job = context.job
     await context.bot.approve_chat_join_request(chat_id=job.data['chat_id'], user_id=job.data['user_id'])
 
-# 5. Link Filter (Sirf Community mein)
+# --- 3. LINK FILTERING (STRICT) ---
 async def filter_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Sirf Community ID check karein
-    if update.effective_chat.id == COMMUNITY_ID:
-        # Agar sender Admin nahi hai, toh link check karein
-        if update.effective_user.id != ADMIN_ID:
-            msg_text = update.message.text or update.message.caption or ""
-            if "t.me/" in msg_text or "http" in msg_text:
-                await update.message.delete()
+    msg = update.message
+    # Check if link exists
+    if msg.text and ("t.me/" in msg.text or "http" in msg.text):
+        # Allow only if sender is Admin AND link is exactly OWNER_LINK
+        if msg.from_user.id == ADMIN_ID and msg.text.strip() == OWNER_LINK:
+            return 
+        # Otherwise delete EVERYTHING (private or community)
+        await msg.delete()
+
+# --- 4. RELAY LOGIC ---
+async def relay_to_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.id != ADMIN_ID:
+        await context.bot.forward_message(chat_id=ADMIN_ID, from_chat_id=update.effective_chat.id, message_id=update.message.message_id)
+
+async def reply_from_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.reply_to_message:
+        target_id = update.message.reply_to_message.forward_from.id
+        await context.bot.send_message(chat_id=target_id, text=update.message.text)
 
 if __name__ == '__main__':
-    application = ApplicationBuilder().token(BOT_TOKEN).build()
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
     
-    # Handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(ChatJoinRequestHandler(handle_join_request))
-    application.add_handler(MessageHandler(filters.Chat(ADMIN_ID) & filters.REPLY, reply_to_user))
-    application.add_handler(MessageHandler(filters.TEXT & (~filters.Chat(ADMIN_ID)), forward_to_admin))
-    application.add_handler(MessageHandler(filters.TEXT | filters.CAPTION, filter_links))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(ChatJoinRequestHandler(handle_join_request))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.Chat(ADMIN_ID)), relay_to_admin))
+    app.add_handler(MessageHandler(filters.Chat(ADMIN_ID) & filters.REPLY, reply_from_admin))
+    app.add_handler(MessageHandler(filters.TEXT | filters.CAPTION, filter_links))
     
-    application.run_polling()
+    app.run_polling()
     
