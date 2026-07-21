@@ -1,6 +1,6 @@
 import os
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "PUT_YOUR_BOT_TOKEN_HERE")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8851943854:AAGfy9xw9srlQCE5g_yH0hMYqjPsI5NC-e4")
 
 # Chat where screenshots + conversation get forwarded (can be a group with
 # several admins in it, or just your own DM with the bot).
