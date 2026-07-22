@@ -1,129 +1,325 @@
+"""
+Telegram Moderation Bot (Full Version)
+=======================================
+
+requirements.txt:
+    aiogram==3.13.1
+    aiosqlite==0.20.0
+    aiofiles==24.1.0
+
+Environment variables (set on Render, NEVER hardcode these):
+    BOT_TOKEN            -> bot token from @BotFather
+    OWNER_ID             -> your numeric Telegram user id
+    COMMUNITY_CHAT_ID     -> numeric chat id of "Gold Expert Fx Community" (e.g. -100xxxxxxxxxx)
+    PRIVATE_CHANNEL_ID    -> numeric chat id of "Gold Expert Fx Private Channel" (e.g. -100xxxxxxxxxx)
+
+Only NEW join requests (received after this bot is running) are managed. Requests
+that were already pending before the bot started are left untouched.
+
+Behaviour implemented:
+    1. Owner posts ANY link (even third-party) in the community -> never deleted.
+    2. The 3 whitelisted links below, when posted DIRECTLY (not forwarded) by
+       anyone in the community -> never deleted.
+    3. Any other link posted by a normal member -> deleted.
+    4. Any message FORWARDED from an admin OR forwarded from a private channel
+       and containing a link -> deleted, even if the link is whitelisted.
+    5. Join requests to the Private Channel:
+         - If the requesting user is currently a member of the Community ->
+           request is left pending. Once that user LEAVES the Community, a
+           7 hour timer starts; after 7 hours the request is auto-approved.
+         - If the requesting user is NOT a member of the Community (direct
+           join request) -> approved immediately.
+"""
+
 import asyncio
+import logging
+import os
 import re
-from datetime import datetime, timedelta
-from telethon import TelegramClient, events
+import sqlite3
+import time
+from contextlib import closing
 
-# Apni Telegram API credentials yahan dalein
-API_ID = 1234567  # Apka API ID
-API_HASH = "your_api_hash_here"
-BOT_TOKEN = "your_bot_token_here"
+from aiogram import Bot, Dispatcher, F, Router
+from aiogram.enums import ChatMemberStatus, ParseMode
+from aiogram.types import ChatJoinRequest, ChatMemberUpdated, Message
+from aiogram.client.default import DefaultBotProperties
 
-client = TelegramClient("gold_expert_bot", API_ID, API_HASH).start(bot_token=BOT_TOKEN)
+# --------------------------------------------------------------------------- #
+# Configuration
+# --------------------------------------------------------------------------- #
 
-# Whitelisted links jo delete nahi honi chahiye
-ALLOWED_LINKS = [
-    "brokeraccountguide.com",
-    "goldexpertfxcommunity",
-    "ri2sc_tdify5nti1",
-]
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+if not BOT_TOKEN:
+    raise RuntimeError("Set BOT_TOKEN before running.")
 
-# IDs configure karein
-COMMUNITY_ID = -1001234567890  # Aapki Community/Group ID
-PRIVATE_CHANNEL_ID = -1001987654321  # Aapka Private Channel ID
-OWNER_ID = 123456789  # Aapki (Owner) Telegram User ID
+OWNER_ID = int(os.environ.get("OWNER_ID", "0"))
+COMMUNITY_CHAT_ID = int(os.environ.get("COMMUNITY_CHAT_ID", "0"))
+PRIVATE_CHANNEL_ID = int(os.environ.get("PRIVATE_CHANNEL_ID", "0"))
 
-# Pending requests tracking ke liye dictionary
-pending_requests = {}
+# Links allowed to stay if posted DIRECTLY (not forwarded) in the community.
+WHITELISTED_LINKS = {
+    "https://www.brokeraccountguide.com/",
+    "https://t.me/GoldExpertFxCommunity",
+    "https://telegram.me/+Ri2SC_TdIFY5NTI1",
+}
 
+APPROVAL_DELAY_SECONDS = 7 * 60 * 60  # 7 hours
+DB_PATH = "bot_data.db"
 
-def contains_unallowed_link(text):
-  if not text:
-    return False
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-  # URL regex pattern
-  url_pattern = re.compile(r"https?://[^\s]+|www\.[^\s]+|t\.me/[^\s]+", re.IGNORECASE)
-  found_urls = url_pattern.findall(text)
+URL_REGEX = re.compile(
+    r"(https?://\S+|t(?:elegram)?\.me/\S+|www\.\S+)", re.IGNORECASE
+)
 
-  if not found_urls:
-    return False
+router = Router()
 
-  for url in found_urls:
-    is_allowed = any(allowed in url.lower() for allowed in ALLOWED_LINKS)
-    if not is_allowed:
-      return True  # Unauthorized link mil gayi
+# --------------------------------------------------------------------------- #
+# Storage (sqlite) for pending join requests
+# --------------------------------------------------------------------------- #
 
-  return False
-
-
-@client.on(events.NewMessage(chats=PRIVATE_CHANNEL_ID))
-async def handle_channel_messages(event):
-  sender_id = event.sender_id
-  message_text = event.raw_text
-
-  # 1. Agar owner ne message bheja hai toh delete na karein
-  if sender_id == OWNER_ID:
-    return
-
-  # 2. Check karein kya message mein koi unauthorized link hai ya forward kiya gaya hai
-  has_bad_link = contains_unallowed_link(message_text)
-  is_forwarded = event.message.fwd_from is not None
-
-  if has_bad_link or is_forwarded:
-    try:
-      await event.delete()
-      print(f"Deleted unauthorized or forwarded message from: {sender_id}")
-    except Exception as e:
-      print(f"Error deleting message: {e}")
-
-
-@client.on(events.ChatAction)
-async def handle_join_requests(event):
-  if event.user_joined:
-    user_id = event.user_id
-    chat_id = event.chat_id
-
-    if chat_id == PRIVATE_CHANNEL_ID:
-      try:
-        participant = await client.get_permissions(COMMUNITY_ID, user_id)
-        is_in_community = participant and not participant.is_banned
-      except Exception:
-        is_in_community = False
-
-      if is_in_community:
-        pending_requests[user_id] = {
-            "time": datetime.now(),
-            "chat_id": chat_id,
-        }
-        print(
-            f"User {user_id} is in Community. Holding private channel request"
-            " for 7 hours."
-        )
-
-
-async def background_request_scanner():
-  while True:
-    await asyncio.sleep(60)
-    now = datetime.now()
-
-    for user_id, data in list(pending_requests.items()):
-      chat_id = data["chat_id"]
-      request_time = data["time"]
-
-      if now - request_time >= timedelta(hours=7):
-        try:
-          participant = await client.get_permissions(COMMUNITY_ID, user_id)
-          is_still_in_community = participant and not participant.is_banned
-        except Exception:
-          is_still_in_community = False
-
-        if not is_still_in_community:
-          try:
-            print(
-                f"Approved join request for user {user_id} after 7 hours of"
-                " leaving community."
+def db_init() -> None:
+    with closing(sqlite3.connect(DB_PATH)) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pending_join_requests (
+                user_id INTEGER PRIMARY KEY,
+                status TEXT NOT NULL,           -- 'waiting_leave' or 'waiting_period'
+                left_at REAL                    -- unix timestamp when user left community
             )
-          except Exception as e:
-            print(f"Failed to approve request for {user_id}: {e}")
+            """
+        )
+        conn.commit()
 
-        del pending_requests[user_id]
+
+def db_set_waiting_leave(user_id: int) -> None:
+    with closing(sqlite3.connect(DB_PATH)) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO pending_join_requests (user_id, status, left_at) "
+            "VALUES (?, 'waiting_leave', NULL)",
+            (user_id,),
+        )
+        conn.commit()
 
 
-def main():
-  print("Bot is running...")
-  client.loop.create_task(background_request_scanner())
-  client.run_until_disconnected()
+def db_mark_left(user_id: int) -> None:
+    with closing(sqlite3.connect(DB_PATH)) as conn:
+        cur = conn.execute(
+            "SELECT status FROM pending_join_requests WHERE user_id = ?", (user_id,)
+        )
+        row = cur.fetchone()
+        if row and row[0] == "waiting_leave":
+            conn.execute(
+                "UPDATE pending_join_requests SET status = 'waiting_period', left_at = ? "
+                "WHERE user_id = ?",
+                (time.time(), user_id),
+            )
+            conn.commit()
+
+
+def db_get_due_approvals(cutoff_ts: float) -> list[int]:
+    with closing(sqlite3.connect(DB_PATH)) as conn:
+        cur = conn.execute(
+            "SELECT user_id FROM pending_join_requests "
+            "WHERE status = 'waiting_period' AND left_at IS NOT NULL AND left_at <= ?",
+            (cutoff_ts,),
+        )
+        return [r[0] for r in cur.fetchall()]
+
+
+def db_remove(user_id: int) -> None:
+    with closing(sqlite3.connect(DB_PATH)) as conn:
+        conn.execute("DELETE FROM pending_join_requests WHERE user_id = ?", (user_id,))
+        conn.commit()
+
+
+def db_has_pending(user_id: int) -> bool:
+    with closing(sqlite3.connect(DB_PATH)) as conn:
+        cur = conn.execute(
+            "SELECT 1 FROM pending_join_requests WHERE user_id = ?", (user_id,)
+        )
+        return cur.fetchone() is not None
+
+
+# --------------------------------------------------------------------------- #
+# Helpers
+# --------------------------------------------------------------------------- #
+
+def extract_links(text: str) -> list[str]:
+    if not text:
+        return []
+    return URL_REGEX.findall(text)
+
+
+def is_forwarded(message: Message) -> bool:
+    return getattr(message, "forward_origin", None) is not None
+
+
+async def is_forward_source_admin_or_private_channel(bot: Bot, message: Message) -> bool:
+    """
+    True if the message was forwarded from:
+      - a chat admin of the community, OR
+      - any private channel
+    """
+    origin = getattr(message, "forward_origin", None)
+    if origin is None:
+        return False
+
+    origin_type = getattr(origin, "type", None)
+
+    if origin_type == "channel":
+        return True
+
+    sender_user = getattr(origin, "sender_user", None)
+    if sender_user is not None and COMMUNITY_CHAT_ID:
+        try:
+            member = await bot.get_chat_member(COMMUNITY_CHAT_ID, sender_user.id)
+            if member.status in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR):
+                return True
+        except Exception as e:
+            logger.warning("Could not check forward sender admin status: %s", e)
+
+    return False
+
+
+async def is_member_of_community(bot: Bot, user_id: int) -> bool:
+    if not COMMUNITY_CHAT_ID:
+        return False
+    try:
+        member = await bot.get_chat_member(COMMUNITY_CHAT_ID, user_id)
+        return member.status in (
+            ChatMemberStatus.MEMBER,
+            ChatMemberStatus.ADMINISTRATOR,
+            ChatMemberStatus.CREATOR,
+            ChatMemberStatus.RESTRICTED,
+        )
+    except Exception as e:
+        logger.warning("Could not check community membership for %s: %s", user_id, e)
+        return False
+
+
+# --------------------------------------------------------------------------- #
+# Handlers: link moderation
+# --------------------------------------------------------------------------- #
+
+@router.message(F.chat.id == COMMUNITY_CHAT_ID)
+async def moderate_links(message: Message, bot: Bot) -> None:
+    text = message.text or message.caption or ""
+    links = extract_links(text)
+    if not links:
+        return
+
+    sender_id = message.from_user.id if message.from_user else None
+
+    # 1. Owner's links are always safe.
+    if sender_id == OWNER_ID:
+        return
+
+    forwarded = is_forwarded(message)
+
+    if forwarded:
+        # 4. Forwarded from admin or private channel -> delete regardless of whitelist.
+        if await is_forward_source_admin_or_private_channel(bot, message):
+            await _delete_message(bot, message)
+            return
+
+    # 2/3. Direct post: whitelist check.
+    if all(link in WHITELISTED_LINKS for link in links) and not forwarded:
+        return  # allowed, don't delete
+
+    await _delete_message(bot, message)
+
+
+async def _delete_message(bot: Bot, message: Message) -> None:
+    try:
+        await bot.delete_message(message.chat.id, message.message_id)
+    except Exception as e:
+        logger.warning("Failed to delete message %s: %s", message.message_id, e)
+
+
+# --------------------------------------------------------------------------- #
+# Core join-request decision logic (shared by live handler + startup scan)
+# --------------------------------------------------------------------------- #
+
+async def process_join_request(bot: Bot, user_id: int) -> None:
+    if await is_member_of_community(bot, user_id):
+        db_set_waiting_leave(user_id)
+        logger.info("User %s is a community member; join request left pending.", user_id)
+    else:
+        try:
+            await bot.approve_chat_join_request(PRIVATE_CHANNEL_ID, user_id)
+            logger.info("Approved direct join request for user %s.", user_id)
+        except Exception as e:
+            logger.warning("Failed to approve join request for %s: %s", user_id, e)
+
+
+# --------------------------------------------------------------------------- #
+# Handlers: join requests to the private channel (NEW requests, live)
+# --------------------------------------------------------------------------- #
+
+@router.chat_join_request(F.chat.id == PRIVATE_CHANNEL_ID)
+async def handle_join_request(request: ChatJoinRequest, bot: Bot) -> None:
+    await process_join_request(bot, request.from_user.id)
+
+
+@router.chat_member(F.chat.id == COMMUNITY_CHAT_ID)
+async def handle_community_membership_change(event: ChatMemberUpdated) -> None:
+    old_status = event.old_chat_member.status
+    new_status = event.new_chat_member.status
+    user_id = event.new_chat_member.user.id
+
+    left_statuses = (ChatMemberStatus.LEFT, ChatMemberStatus.KICKED)
+    was_in = old_status not in left_statuses
+    now_out = new_status in left_statuses
+
+    if was_in and now_out and db_has_pending(user_id):
+        db_mark_left(user_id)
+        logger.info("User %s left the community; 7h approval timer started.", user_id)
+
+
+# --------------------------------------------------------------------------- #
+# Background task: approve pending requests once 7h have passed since leaving
+# --------------------------------------------------------------------------- #
+
+async def approval_worker(bot: Bot) -> None:
+    while True:
+        cutoff = time.time() - APPROVAL_DELAY_SECONDS
+        for user_id in db_get_due_approvals(cutoff):
+            try:
+                await bot.approve_chat_join_request(PRIVATE_CHANNEL_ID, user_id)
+                logger.info("Auto-approved delayed join request for user %s.", user_id)
+            except Exception as e:
+                logger.warning("Failed to auto-approve %s: %s", user_id, e)
+            finally:
+                db_remove(user_id)
+        await asyncio.sleep(300)  # check every 5 minutes
+
+
+# --------------------------------------------------------------------------- #
+# Entrypoint
+# --------------------------------------------------------------------------- #
+
+async def main() -> None:
+    db_init()
+
+    bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    dp = Dispatcher()
+    dp.include_router(router)
+
+    asyncio.create_task(approval_worker(bot))
+
+    await bot.delete_webhook(drop_pending_updates=True)
+    await dp.start_polling(
+        bot,
+        allowed_updates=[
+            "message",
+            "chat_join_request",
+            "chat_member",
+        ],
+    )
 
 
 if __name__ == "__main__":
-  main()
+    asyncio.run(main())
     
