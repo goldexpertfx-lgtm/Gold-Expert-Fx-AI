@@ -1,34 +1,50 @@
 """
-Telegram Moderation Bot (Full Version)
-=======================================
+Telegram Moderation Bot (Final Full Version)
+=============================================
+
+ONLY two features are active in this bot:
+    1. Link moderation in the community.
+    2. Join-request handling for the private channel (including a one-time
+       startup scan of requests that were already pending before this bot
+       started running).
 
 requirements.txt:
     aiogram==3.13.1
     aiosqlite==0.20.0
     aiofiles==24.1.0
 
-Environment variables (set on Render, NEVER hardcode these):
+Environment variables (set these on Render -> Environment. NEVER hardcode them):
     BOT_TOKEN            -> bot token from @BotFather
     OWNER_ID             -> your numeric Telegram user id
     COMMUNITY_CHAT_ID     -> numeric chat id of "Gold Expert Fx Community" (e.g. -100xxxxxxxxxx)
     PRIVATE_CHANNEL_ID    -> numeric chat id of "Gold Expert Fx Private Channel" (e.g. -100xxxxxxxxxx)
 
-Only NEW join requests (received after this bot is running) are managed. Requests
-that were already pending before the bot started are left untouched.
+Only NEW join requests (received while this bot is running) are managed.
+Requests that were already pending before the bot started are left alone.
 
-Behaviour implemented:
-    1. Owner posts ANY link (even third-party) in the community -> never deleted.
-    2. The 3 whitelisted links below, when posted DIRECTLY (not forwarded) by
-       anyone in the community -> never deleted.
-    3. Any other link posted by a normal member -> deleted.
-    4. Any message FORWARDED from an admin OR forwarded from a private channel
-       and containing a link -> deleted, even if the link is whitelisted.
-    5. Join requests to the Private Channel:
-         - If the requesting user is currently a member of the Community ->
-           request is left pending. Once that user LEAVES the Community, a
-           7 hour timer starts; after 7 hours the request is auto-approved.
-         - If the requesting user is NOT a member of the Community (direct
-           join request) -> approved immediately.
+--------------------------------------------------------------------------
+FEATURE 1: LINK MODERATION (community)
+--------------------------------------------------------------------------
+    - Owner posts ANY link (even third-party) -> never deleted.
+    - The 3 whitelisted links below, when posted DIRECTLY (not forwarded) by
+      anyone -> never deleted.
+    - Any other link posted by a normal member -> deleted.
+    - Any message FORWARDED from an admin OR forwarded from a private channel
+      and containing a link -> deleted, even if the link is one of the
+      whitelisted ones.
+    - Works both for normal group messages AND for direct channel posts
+      (Telegram delivers channel posts as a separate update type).
+
+--------------------------------------------------------------------------
+FEATURE 2: JOIN REQUESTS (private channel)
+--------------------------------------------------------------------------
+    - If the requesting user is currently a member of the Community -> the
+      request is left pending (neither approved nor declined) for as long as
+      that user stays in the Community -- even if that is years. The moment
+      that user LEAVES the Community (whenever that happens), a 7 hour timer
+      starts; after 7 hours the request is auto-approved (never declined).
+    - If the requesting user is NOT a member of the Community (a direct join
+      request) -> approved immediately.
 """
 
 import asyncio
@@ -200,10 +216,21 @@ async def is_member_of_community(bot: Bot, user_id: int) -> bool:
 
 
 # --------------------------------------------------------------------------- #
-# Handlers: link moderation
+# FEATURE 1: link moderation (covers both normal messages and channel posts)
 # --------------------------------------------------------------------------- #
 
 @router.message(F.chat.id == COMMUNITY_CHAT_ID)
+async def moderate_links_message(message: Message, bot: Bot) -> None:
+    await moderate_links(message, bot)
+
+
+@router.channel_post(F.chat.id == COMMUNITY_CHAT_ID)
+async def moderate_links_channel_post(message: Message, bot: Bot) -> None:
+    # Handles posts made directly in the channel (e.g. by admins), which
+    # Telegram delivers as channel_post updates instead of plain message updates.
+    await moderate_links(message, bot)
+
+
 async def moderate_links(message: Message, bot: Bot) -> None:
     text = message.text or message.caption or ""
     links = extract_links(text)
@@ -212,22 +239,23 @@ async def moderate_links(message: Message, bot: Bot) -> None:
 
     sender_id = message.from_user.id if message.from_user else None
 
-    # 1. Owner's links are always safe.
+    # Owner's links are always safe.
     if sender_id == OWNER_ID:
         return
 
     forwarded = is_forwarded(message)
 
     if forwarded:
-        # 4. Forwarded from admin or private channel -> delete regardless of whitelist.
+        # Forwarded from admin or private channel -> delete regardless of whitelist.
         if await is_forward_source_admin_or_private_channel(bot, message):
             await _delete_message(bot, message)
             return
 
-    # 2/3. Direct post: whitelist check.
+    # Direct post: whitelist check.
     if all(link in WHITELISTED_LINKS for link in links) and not forwarded:
         return  # allowed, don't delete
 
+    # Anything else with a link gets removed.
     await _delete_message(bot, message)
 
 
@@ -239,7 +267,7 @@ async def _delete_message(bot: Bot, message: Message) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Core join-request decision logic (shared by live handler + startup scan)
+# FEATURE 2: join requests to the private channel
 # --------------------------------------------------------------------------- #
 
 async def process_join_request(bot: Bot, user_id: int) -> None:
@@ -253,10 +281,6 @@ async def process_join_request(bot: Bot, user_id: int) -> None:
         except Exception as e:
             logger.warning("Failed to approve join request for %s: %s", user_id, e)
 
-
-# --------------------------------------------------------------------------- #
-# Handlers: join requests to the private channel (NEW requests, live)
-# --------------------------------------------------------------------------- #
 
 @router.chat_join_request(F.chat.id == PRIVATE_CHANNEL_ID)
 async def handle_join_request(request: ChatJoinRequest, bot: Bot) -> None:
@@ -278,11 +302,8 @@ async def handle_community_membership_change(event: ChatMemberUpdated) -> None:
         logger.info("User %s left the community; 7h approval timer started.", user_id)
 
 
-# --------------------------------------------------------------------------- #
-# Background task: approve pending requests once 7h have passed since leaving
-# --------------------------------------------------------------------------- #
-
 async def approval_worker(bot: Bot) -> None:
+    """Background loop: approve pending requests once 7h have passed since leaving."""
     while True:
         cutoff = time.time() - APPROVAL_DELAY_SECONDS
         for user_id in db_get_due_approvals(cutoff):
@@ -314,6 +335,7 @@ async def main() -> None:
         bot,
         allowed_updates=[
             "message",
+            "channel_post",
             "chat_join_request",
             "chat_member",
         ],
