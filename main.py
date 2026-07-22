@@ -10,7 +10,7 @@ REQUIRED ENVIRONMENT VARIABLES (set these on Render, under
 Environment -> Environment Variables):
     BOT_TOKEN      - 8851943854:AAGfy9xw9srlQCE5g_yH0hMYqjPsI5NC-e4
     OWNER_ID       - 7415265825
-    ADMIN_CHAT_ID  - 4477244119
+    ADMIN_CHAT_ID  - 8851943854
 
 Optional:
     DATABASE_URL   - defaults to a local sqlite file
