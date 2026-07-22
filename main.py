@@ -1,32 +1,44 @@
 """
-Telegram Moderation Bot
-=======================
+Telegram Moderation Bot (Full Version)
+=======================================
 
-Requirements (requirements.txt):
+requirements.txt:
     aiogram==3.13.1
     aiosqlite==0.20.0
     aiofiles==24.1.0
+    pyrogram==2.0.106
+    tgcrypto==1.2.5
 
-Environment variables (set these on Render / your host — do NOT hardcode the token):
-    BOT_TOKEN            -> your bot token from @BotFather
-    OWNER_ID             -> your (owner's) numeric Telegram user id
+Environment variables (set on Render, NEVER hardcode these):
+    BOT_TOKEN            -> bot token from @BotFather
+    OWNER_ID             -> your numeric Telegram user id
     COMMUNITY_CHAT_ID     -> numeric chat id of "Gold Expert Fx Community" (e.g. -100xxxxxxxxxx)
     PRIVATE_CHANNEL_ID    -> numeric chat id of "Gold Expert Fx Private Channel" (e.g. -100xxxxxxxxxx)
+    API_ID               -> from https://my.telegram.org (needed ONLY to scan already-pending
+                             join requests that were sent BEFORE this bot started)
+    API_HASH             -> from https://my.telegram.org (same as above)
+
+If API_ID / API_HASH are not set, the bot still works fully for NEW join requests and
+NEW messages — it just won't be able to look back at requests that were already
+pending before it started (Telegram's normal Bot API has no method for that; only
+MTProto, which Pyrogram gives us, can list them).
 
 Behaviour implemented:
     1. Owner posts ANY link (even third-party) in the community -> never deleted.
     2. The 3 whitelisted links below, when posted DIRECTLY (not forwarded) by
        anyone in the community -> never deleted.
     3. Any other link posted by a normal member -> deleted.
-    4. Any message that is FORWARDED from an admin OR forwarded from a private
-       channel and contains a link -> deleted, even if the link is whitelisted.
+    4. Any message FORWARDED from an admin OR forwarded from a private channel
+       and containing a link -> deleted, even if the link is whitelisted.
     5. Join requests to the Private Channel:
          - If the requesting user is currently a member of the Community ->
-           the request is left pending (neither approved nor declined). Once
-           that user LEAVES the Community, a 7 hour timer starts; after 7
-           hours the request is auto-approved.
-         - If the requesting user is NOT a member of the Community (a direct
+           request is left pending. Once that user LEAVES the Community, a
+           7 hour timer starts; after 7 hours the request is auto-approved.
+         - If the requesting user is NOT a member of the Community (direct
            join request) -> approved immediately.
+    6. On startup, ALREADY-PENDING join requests (sent before the bot was
+       running) are scanned once via Pyrogram and processed with the exact
+       same rule as #5.
 """
 
 import asyncio
@@ -54,7 +66,10 @@ OWNER_ID = int(os.environ.get("OWNER_ID", "0"))
 COMMUNITY_CHAT_ID = int(os.environ.get("COMMUNITY_CHAT_ID", "0"))
 PRIVATE_CHANNEL_ID = int(os.environ.get("PRIVATE_CHANNEL_ID", "0"))
 
-# Links that are allowed to stay if posted DIRECTLY (not forwarded) in the community.
+API_ID = os.environ.get("API_ID")            # optional, needed only for scanning old requests
+API_HASH = os.environ.get("API_HASH")        # optional, needed only for scanning old requests
+
+# Links allowed to stay if posted DIRECTLY (not forwarded) in the community.
 WHITELISTED_LINKS = {
     "https://www.brokeraccountguide.com/",
     "https://t.me/GoldExpertFxCommunity",
@@ -151,13 +166,12 @@ def extract_links(text: str) -> list[str]:
 
 
 def is_forwarded(message: Message) -> bool:
-    # aiogram 3.13 exposes forward info via forward_origin (new API)
     return getattr(message, "forward_origin", None) is not None
 
 
 async def is_forward_source_admin_or_private_channel(bot: Bot, message: Message) -> bool:
     """
-    Returns True if the message was forwarded from:
+    True if the message was forwarded from:
       - a chat admin of the community, OR
       - any private channel
     """
@@ -167,11 +181,9 @@ async def is_forward_source_admin_or_private_channel(bot: Bot, message: Message)
 
     origin_type = getattr(origin, "type", None)
 
-    # Forwarded from a channel (private channels included) -> treat as private channel forward
     if origin_type == "channel":
         return True
 
-    # Forwarded from a user -> check if that user is an admin of the community
     sender_user = getattr(origin, "sender_user", None)
     if sender_user is not None and COMMUNITY_CHAT_ID:
         try:
@@ -220,17 +232,15 @@ async def moderate_links(message: Message, bot: Bot) -> None:
     forwarded = is_forwarded(message)
 
     if forwarded:
-        # 4. Forwarded from admin or from a private channel -> delete regardless of whitelist.
+        # 4. Forwarded from admin or private channel -> delete regardless of whitelist.
         if await is_forward_source_admin_or_private_channel(bot, message):
             await _delete_message(bot, message)
             return
-        # Forwarded from a non-admin, non-channel source: fall through to normal check.
 
     # 2/3. Direct post: whitelist check.
     if all(link in WHITELISTED_LINKS for link in links) and not forwarded:
         return  # allowed, don't delete
 
-    # Anything else with a link gets removed.
     await _delete_message(bot, message)
 
 
@@ -242,24 +252,28 @@ async def _delete_message(bot: Bot, message: Message) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Handlers: join requests to the private channel
+# Core join-request decision logic (shared by live handler + startup scan)
 # --------------------------------------------------------------------------- #
 
-@router.chat_join_request(F.chat.id == PRIVATE_CHANNEL_ID)
-async def handle_join_request(request: ChatJoinRequest, bot: Bot) -> None:
-    user_id = request.from_user.id
-
+async def process_join_request(bot: Bot, user_id: int) -> None:
     if await is_member_of_community(bot, user_id):
-        # Leave the request pending; do not approve or decline now.
         db_set_waiting_leave(user_id)
         logger.info("User %s is a community member; join request left pending.", user_id)
     else:
-        # Direct join request -> approve immediately.
         try:
             await bot.approve_chat_join_request(PRIVATE_CHANNEL_ID, user_id)
             logger.info("Approved direct join request for user %s.", user_id)
         except Exception as e:
             logger.warning("Failed to approve join request for %s: %s", user_id, e)
+
+
+# --------------------------------------------------------------------------- #
+# Handlers: join requests to the private channel (NEW requests, live)
+# --------------------------------------------------------------------------- #
+
+@router.chat_join_request(F.chat.id == PRIVATE_CHANNEL_ID)
+async def handle_join_request(request: ChatJoinRequest, bot: Bot) -> None:
+    await process_join_request(bot, request.from_user.id)
 
 
 @router.chat_member(F.chat.id == COMMUNITY_CHAT_ID)
@@ -275,6 +289,51 @@ async def handle_community_membership_change(event: ChatMemberUpdated) -> None:
     if was_in and now_out and db_has_pending(user_id):
         db_mark_left(user_id)
         logger.info("User %s left the community; 7h approval timer started.", user_id)
+
+
+# --------------------------------------------------------------------------- #
+# Startup: scan requests that were ALREADY pending before the bot started
+# (requires Pyrogram + API_ID + API_HASH, since the plain Bot API cannot list them)
+# --------------------------------------------------------------------------- #
+
+async def scan_existing_join_requests(bot: Bot) -> None:
+    if not (API_ID and API_HASH):
+        logger.info(
+            "API_ID/API_HASH not set -> skipping scan of already-pending join "
+            "requests. Only new requests from now on will be handled."
+        )
+        return
+
+    try:
+        from pyrogram import Client
+    except ImportError:
+        logger.warning(
+            "Pyrogram not installed -> cannot scan already-pending join requests. "
+            "Add 'pyrogram' and 'tgcrypto' to requirements.txt."
+        )
+        return
+
+    logger.info("Scanning already-pending join requests for the private channel...")
+
+    async with Client(
+        name="scanner_session",
+        api_id=int(API_ID),
+        api_hash=API_HASH,
+        bot_token=BOT_TOKEN,
+        in_memory=True,
+    ) as app:
+        count = 0
+        try:
+            async for req in app.get_chat_join_requests(PRIVATE_CHANNEL_ID):
+                count += 1
+                user_id = req.user.id
+                if db_has_pending(user_id):
+                    continue  # already tracked, skip
+                await process_join_request(bot, user_id)
+        except Exception as e:
+            logger.warning("Could not fetch existing join requests: %s", e)
+
+    logger.info("Finished scanning existing join requests. Found: %d", count)
 
 
 # --------------------------------------------------------------------------- #
@@ -306,6 +365,9 @@ async def main() -> None:
     dp = Dispatcher()
     dp.include_router(router)
 
+    # One-time scan of requests that were already pending before this run started.
+    await scan_existing_join_requests(bot)
+
     asyncio.create_task(approval_worker(bot))
 
     await bot.delete_webhook(drop_pending_updates=True)
@@ -321,4 +383,4 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
-    
+            
