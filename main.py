@@ -169,25 +169,47 @@ def extract_links(text: str) -> list[str]:
 
 
 def is_forwarded(message: Message) -> bool:
-    return getattr(message, "forward_origin", None) is not None
+    if getattr(message, "forward_origin", None) is not None:
+        return True
+    # Legacy / alternate fields some Bot API versions & auto-forwarded
+    # channel posts populate instead of forward_origin.
+    if getattr(message, "forward_from_chat", None) is not None:
+        return True
+    if getattr(message, "forward_from", None) is not None:
+        return True
+    if getattr(message, "is_automatic_forward", False):
+        return True
+    return False
 
 
 async def is_forward_source_admin_or_private_channel(bot: Bot, message: Message) -> bool:
     """
     True if the message was forwarded from:
       - a chat admin of the community, OR
-      - any private channel
+      - any private channel (including Telegram's automatic forward from a
+        linked channel into its discussion group)
     """
     origin = getattr(message, "forward_origin", None)
-    if origin is None:
-        return False
+    legacy_chat = getattr(message, "forward_from_chat", None)
+    legacy_user = getattr(message, "forward_from", None)
 
-    origin_type = getattr(origin, "type", None)
+    origin_type = getattr(origin, "type", None) if origin else None
 
+    # New-style origin says it came from a channel.
     if origin_type == "channel":
         return True
 
-    sender_user = getattr(origin, "sender_user", None)
+    # Legacy / auto-forward field: forwarded from any channel.
+    if legacy_chat is not None and getattr(legacy_chat, "type", None) == "channel":
+        return True
+
+    # Telegram's automatic forward from a linked channel into its discussion group.
+    if getattr(message, "is_automatic_forward", False):
+        return True
+
+    # Forwarded from a user -> check if that user is an admin of the community.
+    sender_user = getattr(origin, "sender_user", None) if origin else None
+    sender_user = sender_user or legacy_user
     if sender_user is not None and COMMUNITY_CHAT_ID:
         try:
             member = await bot.get_chat_member(COMMUNITY_CHAT_ID, sender_user.id)
@@ -238,30 +260,38 @@ async def moderate_links(message: Message, bot: Bot) -> None:
         return
 
     sender_id = message.from_user.id if message.from_user else None
+    forwarded = is_forwarded(message)
+    logger.info(
+        "Link detected in chat %s (msg %s): links=%s sender=%s forwarded=%s",
+        message.chat.id, message.message_id, links, sender_id, forwarded,
+    )
 
     # Owner's links are always safe.
     if sender_id == OWNER_ID:
+        logger.info("-> kept: sender is OWNER_ID")
         return
-
-    forwarded = is_forwarded(message)
 
     if forwarded:
         # Forwarded from admin or private channel -> delete regardless of whitelist.
         if await is_forward_source_admin_or_private_channel(bot, message):
+            logger.info("-> deleting: forwarded from admin or private channel")
             await _delete_message(bot, message)
             return
 
     # Direct post: whitelist check.
     if all(link in WHITELISTED_LINKS for link in links) and not forwarded:
+        logger.info("-> kept: whitelisted link, not forwarded")
         return  # allowed, don't delete
 
     # Anything else with a link gets removed.
+    logger.info("-> deleting: not owner, not whitelisted-direct")
     await _delete_message(bot, message)
 
 
 async def _delete_message(bot: Bot, message: Message) -> None:
     try:
         await bot.delete_message(message.chat.id, message.message_id)
+        logger.info("Deleted message %s in chat %s", message.message_id, message.chat.id)
     except Exception as e:
         logger.warning("Failed to delete message %s: %s", message.message_id, e)
 
