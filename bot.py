@@ -68,7 +68,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.message:
         await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode="Markdown")
 
-# --- 1. PERMANENT PENDING JOIN REQUEST LOGIC ---
+# --- 1. JOIN REQUEST APPROVAL LOGIC ---
 async def handle_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_join_request = update.chat_join_request
     user = chat_join_request.from_user
@@ -86,15 +86,15 @@ async def handle_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE
         is_in_community = False
 
     if not is_in_community:
-        # Condition: Agar user community mein NAHI hai -> Direct approved kar do
+        # Agar user community mein NAHI hai -> Turant approve kar do
         try:
             await chat_join_request.approve()
-            logger.info(f"User {user.first_name} community mein nahi tha, request instantly approve kar di.")
+            logger.info(f"User {user.first_name} community mein nahi tha, request instantly approved.")
         except Exception as e:
             logger.error(f"Error approving request instantly: {e}")
     else:
-        # Condition: Agar user community mein HAI -> Pending chhod do aur record save kar lo
-        logger.info(f"User {user.first_name} community mein hai, request permanent pending list mein daal di gayi hai.")
+        # Agar user community mein HAI -> Pending mein daal do
+        logger.info(f"User {user.first_name} community mein hai, request pending mein chali gayi.")
         
         pending_data = load_pending_requests()
         user_key = str(user.id)
@@ -110,11 +110,10 @@ async def handle_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def background_pending_checker(application: Application):
     """
-    Yeh background loop har 10 minute baad chalega aur check karega:
-    1. Kya pending user ne community leave kar di hai?
-    2. Kya leave kiye hue 7 ghante ya usse zyada (chahe 50 saal kyu na ho) guzar chuke hain? Agar haan, toh approve kar dega.
+    Yeh background loop check karega:
+    - Agar user ne community leave kar di hai, toh 7 ghante baad request automatically approve ho jayegi.
     """
-    await asyncio.sleep(15)  # Bot fully start hone ke baad pehli baar chalega
+    await asyncio.sleep(15)
     while True:
         try:
             pending_data = load_pending_requests()
@@ -138,7 +137,7 @@ async def background_pending_checker(application: Application):
                     else:
                         if updated_data[user_key]["left_timestamp"] is None:
                             updated_data[user_key]["left_timestamp"] = current_time.isoformat()
-                            logger.info(f"User {user_id} ne community leave kar di hai. 7 ghante ka countdown shuru ho gaya hai.")
+                            logger.info(f"User {user_id} ne community leave kar di. 7 ghante ka timer start!")
                         else:
                             left_time = datetime.fromisoformat(updated_data[user_key]["left_timestamp"])
                             time_diff = current_time - left_time
@@ -146,7 +145,7 @@ async def background_pending_checker(application: Application):
                             if time_diff >= timedelta(hours=7):
                                 try:
                                     await bot.approve_chat_join_request(chat_id=chat_id, user_id=user_id)
-                                    logger.info(f"User {user_id} ko community leave kiye hue 7+ hours ho gaye thay, request approved!")
+                                    logger.info(f"User {user_id} ko community leave kiye 7+ hours ho gaye, successfully approved!")
                                     del updated_data[user_key]
                                 except Exception as e:
                                     logger.error(f"Approval error for user {user_id}: {e}")
@@ -160,7 +159,7 @@ async def background_pending_checker(application: Application):
         await asyncio.sleep(600)
 
 
-# --- 2. LINK DELETION LOGIC (Forwarded posts & Whitelist check) ---
+# --- 2. AUTO DELETE TELEGRAM LINKS LOGIC ---
 async def delete_links_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.message
     if not message:
@@ -184,15 +183,19 @@ async def delete_links_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         if not is_whitelisted:
             try:
                 await message.delete()
-                logger.info("Deleted unauthorized link message instantly.")
+                logger.info("Deleted unauthorized Telegram link message immediately.")
             except Exception as e:
                 logger.error(f"Failed to delete link: {e}")
 
 
-# --- 3. OWNER / USER MESSAGING BRIDGE ---
+# --- 3. USER SUPPORT SYSTEM (WhatsApp Style Bridge) ---
 async def owner_user_bridge(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.message
     if not message or not message.from_user:
+        return
+
+    # Channel ke messages ko ignore karein taake duplicate forward na ho
+    if message.chat.type == "channel":
         return
 
     user = message.from_user
@@ -232,13 +235,12 @@ def main() -> None:
         owner_user_bridge(u, c)
     )))
 
-    # Proper post_init hook jo bot initialization ke baad background task ko safe tareeqay se run karega
     async def post_init(app: Application):
         asyncio.create_task(background_pending_checker(app))
 
     application.post_init = post_init
 
-    print("Bot is up and running with fixed initialization and permanent tracking system...")
+    print("Bot is up and running successfully!")
     application.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
