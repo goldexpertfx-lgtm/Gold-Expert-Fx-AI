@@ -1,12 +1,12 @@
 import os
 import logging
 import asyncio
+import json
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, 
     CommandHandler, 
-    CallbackQueryHandler, 
     ChatJoinRequestHandler, 
     MessageHandler, 
     filters, 
@@ -25,6 +25,9 @@ COMMUNITY_CHAT_ID = os.getenv("COMMUNITY_CHAT_ID", "@GoldExpertFxCommunity")
 PRIVATE_CHANNEL_ID = os.getenv("PRIVATE_CHANNEL_ID", "YOUR_PRIVATE_CHANNEL_ID")
 WEBSITE_URL = "https://goldexpertfx.com/"
 
+# Pending requests save karne ke liye file name
+PENDING_FILE = "pending_requests.json"
+
 # Whitelisted links jo delete nahi honge
 WHITELIST_URLS = [
     "https://t.me/GoldExpertFxCommunity",
@@ -39,75 +42,133 @@ WHITELIST_URLS = [
     "https://t.me/m/S3NYE6srYTJk"
 ]
 
+# --- DATABASE / JSON FUNCTIONS FOR PERSISTENCE ---
+def load_pending_requests():
+    if os.path.exists(PENDING_FILE):
+        try:
+            with open(PENDING_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def save_pending_requests(data):
+    try:
+        with open(PENDING_FILE, "w") as f:
+            json.dump(data, f, indent=4)
+    except Exception as e:
+        logger.error(f"Error saving pending requests: {e}")
+
 # --- START COMMAND ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user = update.effective_user
-    welcome_text = (
-        f"Join Our Channel For Daily 5-7 XAUUSD GOLD Signals 👇👇"
-    )
-    
-    keyboard = [
-        
-        [InlineKeyboardButton("🌐 Visit Website", url=WEBSITE_URL)]
-    ]
+    welcome_text = "Join Our Channel For Daily 5-7 XAUUSD GOLD Signals 👇👇"
+    keyboard = [[InlineKeyboardButton("🌐 Visit Website", url=WEBSITE_URL)]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     if update.message:
         await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode="Markdown")
 
-# --- 1. JOIN REQUEST LOGIC (Community Member Check + 7 Hour Timer) ---
+# --- 1. PERMANENT PENDING JOIN REQUEST LOGIC ---
 async def handle_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_join_request = update.chat_join_request
     user = chat_join_request.from_user
     chat = chat_join_request.chat
 
-    # Sirf target private channel ke liye check karein
     if str(chat.id) != str(PRIVATE_CHANNEL_ID):
         return
 
+    is_in_community = False
     try:
-        # Check karein ke user community mein hai ya nahi
         member = await context.bot.get_chat_member(chat_id=COMMUNITY_CHAT_ID, user_id=user.id)
-        is_in_community = member.status in ["member", "administrator", "creator"]
+        if member.status in ["member", "administrator", "creator"]:
+            is_in_community = True
     except Exception:
         is_in_community = False
 
     if not is_in_community:
-        # Agar community mein nahi hai, toh direct instantly approve kar dein
+        # Agar community mein nahi hai -> Direct instantly approve kar do
         try:
             await chat_join_request.approve()
-            logger.info(f"Approved join request instantly for {user.first_name} (Not in community).")
+            logger.info(f"User {user.first_name} community mein nahi tha, request instantly approve kar di.")
         except Exception as e:
             logger.error(f"Error approving request instantly: {e}")
     else:
-        # Agar already community mein hai, toh approve/decline nahi karenge (pending chor denge)
-        logger.info(f"User {user.first_name} is already in community. Holding request.")
+        # Agar community mein hai -> Pending chhod do aur file mein record save kar lo
+        logger.info(f"User {user.first_name} community mein hai, request ko permanent pending list mein daal diya gaya hai.")
         
-        # 7 hours baad check karne ke liye job lagayein ke agar user ne community leave kar di hai toh approve kar dein
-        context.job_queue.run_once(
-            check_and_approve_after_delay,
-            when=timedelta(hours=7),
-            data={"user_id": user.id, "chat_id": chat.id, "request_obj": chat_join_request}
-        )
+        pending_data = load_pending_requests()
+        # Key string format mein taake JSON mein easily save ho sake
+        user_key = str(user.id)
+        
+        # Agar pehle se record nahi hai, tabhi entry karein (ya update karein)
+        if user_key not in pending_data:
+            pending_data[user_key] = {
+                "chat_id": chat.id,
+                "user_id": user.id,
+                "name": user.first_name,
+                "left_timestamp": None  # Jab user leave karega tab yahan time save hoga
+            }
+            save_pending_requests(pending_data)
 
-async def check_and_approve_after_delay(context: ContextTypes.DEFAULT_TYPE) -> None:
-    job_data = context.job.data
-    user_id = job_data["user_id"]
-    chat_id = job_data["chat_id"]
-    
-    try:
-        # Phir se check karein ke kya user ne community leave kar di hai?
-        member = await context.bot.get_chat_member(chat_id=COMMUNITY_CHAT_ID, user_id=user_id)
-        still_in_community = member.status in ["member", "administrator", "creator"]
-        
-        if not still_in_community:
-            # Agar user ne community leave kar di hai, toh 7 ghante baad request approve kar dein
-            # Note: Telegram API limitations ki wajah se direct chat_join_request object expire ho sakta hai, 
-            # isliye agar approve fail ho toh user ko dobara link se join karne ka keh sakte hain, 
-            # ya agar object valid hai toh approve ho jayega.
-            logger.info(f"User {user_id} left community. Approving join request after 7 hours.")
-    except Exception as e:
-        logger.error(f"Error in delayed join request check: {e}")
+async def background_pending_checker(application: Application):
+    """
+    Yeh background loop har 10 minute baad chalega aur check karega:
+    1. Kya pending user ne community leave kar di hai? Agar haan, toh leave time note karega.
+    2. Kya leave kiye hue 7 ghante (ya usse zyada, chahe 50 saal kyu na ho) guzar chuke hain? Agar haan, toh approve kar dega.
+    """
+    await asyncio.sleep(10)  # Bot start hone ke 10 seconds baad pehli baar chalega
+    while True:
+        try:
+            pending_data = load_pending_requests()
+            if pending_data:
+                updated_data = pending_data.copy()
+                bot = application.bot
+                current_time = datetime.now()
+
+                for user_key, info in pending_data.items():
+                    user_id = info["user_id"]
+                    chat_id = info["chat_id"]
+                    
+                    try:
+                        # Check karein ke user abhi community mein hai ya nahi
+                        member = await bot.get_chat_member(chat_id=COMMUNITY_CHAT_ID, user_id=user_id)
+                        still_in_community = member.status in ["member", "administrator", "creator"]
+                    except Exception:
+                        still_in_community = False
+
+                    if still_in_community:
+                        # Agar wapas community join kar li hai ya andar hi hai, toh timer reset/clear kar dein
+                        updated_data[user_key]["left_timestamp"] = None
+                    else:
+                        # Agar user ne community leave kar di hai
+                        if updated_data[user_key]["left_timestamp"] is None:
+                            # Pehli baar pata chala ke leave kiya hai, toh current time record kar lein
+                            updated_data[user_key]["left_timestamp"] = current_time.isoformat()
+                            logger.info(f"User {user_id} ne community leave kar di hai. 7 ghante ka countdown shuru ho gaya hai.")
+                        else:
+                            # Check karein ke leave kiye hue kitna waqt ho gaya hai
+                            left_time = datetime.fromisoformat(updated_data[user_key]["left_timestamp"])
+                            time_diff = current_time - left_time
+
+                            # Agar 7 ghante ya usse zyada ho gaye hain
+                            if time_diff >= timedelta(hours=7):
+                                try:
+                                    await bot.approve_chat_join_request(chat_id=chat_id, user_id=user_id)
+                                    logger.info(f"User {user_id} ko community leave kiye hue 7+ hours ho gaye thay, request approved!")
+                                    # Approve hone ke baad list se hata dein
+                                    del updated_data[user_key]
+                                except Exception as e:
+                                    logger.error(f"Approval error for user {user_id}: {e}")
+                                    # Agar request expire ho chuki hogi toh bhi list se nikal dein taake error loop na bane
+                                    del updated_data[user_key]
+
+                save_pending_requests(updated_data)
+
+        except Exception as e:
+            logger.error(f"Error in background pending checker loop: {e}")
+
+        # Har 10 minutes baad dobara check karega
+        await asyncio.sleep(600)
 
 
 # --- 2. LINK DELETION LOGIC (Forwarded posts & Whitelist check) ---
@@ -116,7 +177,6 @@ async def delete_links_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     if not message:
         return
 
-    # Check karein ke message mein koi link maujood hai ya nahi
     text_to_check = message.text or message.caption or ""
     entities = message.entities or message.caption_entities or []
     
@@ -130,14 +190,8 @@ async def delete_links_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         has_link = True
 
     if has_link:
-        # Check karein ke kya yeh whitelisted link hai ya nahi
-        is_whitelisted = False
-        for wl in WHITELIST_URLS:
-            if wl in text_to_check:
-                is_whitelisted = True
-                break
+        is_whitelisted = any(wl in text_to_check for wl in WHITELIST_URLS)
         
-        # Agar whitelisted nahi hai, toh 1 second ke andar foran delete kar dein
         if not is_whitelisted:
             try:
                 await message.delete()
@@ -154,12 +208,8 @@ async def owner_user_bridge(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     user = message.from_user
     
-    # Agar message OWNER ki taraf se aaya hai aur kisi message ko REPLY kiya gaya hai
     if user.id == OWNER_ID and message.reply_to_message:
         replied_msg = message.reply_to_message
-        # Original user ID ko track karne ke liye hum message text ya context use kar sakte hain
-        # Yahan hum simple forwarding ya text parsing kar sakte hain. 
-        # Behtar tareeqa yeh hai ke forwarded message ki description se user ID nikal li jaye.
         if replied_msg.forward_from:
             target_user_id = replied_msg.forward_from.id
             try:
@@ -169,10 +219,8 @@ async def owner_user_bridge(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 await message.reply_text(f"❌ Failed to send reply: {e}")
         return
 
-    # Agar message kisi aam user ki taraf se aaya hai ( jo owner nahi hai )
     if user.id != OWNER_ID:
         try:
-            # User ka message owner ke paas forward/notification ke taur par bhej dein
             forwarded = await message.forward(chat_id=OWNER_ID)
             await context.bot.send_message(
                 chat_id=OWNER_ID, 
@@ -188,21 +236,22 @@ async def owner_user_bridge(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 def main() -> None:
     application = Application.builder().token(TOKEN).build()
 
-    # Commands
     application.add_handler(CommandHandler("start", start))
-
-    # Join Request Handler
     application.add_handler(ChatJoinRequestHandler(handle_join_request))
-
-    # Message Handler for Link Deletion & Owner Bridge
     application.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, lambda u, c: asyncio.gather(
         delete_links_handler(u, c),
         owner_user_bridge(u, c)
     )))
 
-    print("Advanced Bot is running...")
+    # Background loop ko bot start hone ke sath hi run kar dein
+    async def post_init(app: Application):
+        asyncio.create_task(background_pending_checker(app))
+
+    application.post_init = post_init
+
+    print("Bot is up and running with permanent pending tracking system...")
     application.run_polling()
 
 if __name__ == "__main__":
     main()
-    
+        
