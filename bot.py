@@ -43,9 +43,7 @@ WHITELIST_URLS = [
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     welcome_text = (
-        f"👋 **Welcome to Gold Expert Fx AI, {user.first_name}!**\n\n"
-        f"Your ultimate gateway for professional XAUUSD (Gold) market analysis, VIP signals, and account management services.\n\n"
-        f"Choose an option below or visit our official website: {WEBSITE_URL}"
+        f"Join Our Channel For Daily 5-7 XAUUSD GOLD Signals 👇👇"
     )
     
     keyboard = [
