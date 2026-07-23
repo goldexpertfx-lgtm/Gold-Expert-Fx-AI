@@ -86,37 +86,35 @@ async def handle_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE
         is_in_community = False
 
     if not is_in_community:
-        # Agar community mein nahi hai -> Direct instantly approve kar do
+        # Condition: Agar user community mein NAHI hai -> Direct approved kar do
         try:
             await chat_join_request.approve()
             logger.info(f"User {user.first_name} community mein nahi tha, request instantly approve kar di.")
         except Exception as e:
             logger.error(f"Error approving request instantly: {e}")
     else:
-        # Agar community mein hai -> Pending chhod do aur file mein record save kar lo
-        logger.info(f"User {user.first_name} community mein hai, request ko permanent pending list mein daal diya gaya hai.")
+        # Condition: Agar user community mein HAI -> Pending chhod do aur record save kar lo
+        logger.info(f"User {user.first_name} community mein hai, request permanent pending list mein daal di gayi hai.")
         
         pending_data = load_pending_requests()
-        # Key string format mein taake JSON mein easily save ho sake
         user_key = str(user.id)
         
-        # Agar pehle se record nahi hai, tabhi entry karein (ya update karein)
         if user_key not in pending_data:
             pending_data[user_key] = {
                 "chat_id": chat.id,
                 "user_id": user.id,
                 "name": user.first_name,
-                "left_timestamp": None  # Jab user leave karega tab yahan time save hoga
+                "left_timestamp": None
             }
             save_pending_requests(pending_data)
 
 async def background_pending_checker(application: Application):
     """
     Yeh background loop har 10 minute baad chalega aur check karega:
-    1. Kya pending user ne community leave kar di hai? Agar haan, toh leave time note karega.
-    2. Kya leave kiye hue 7 ghante (ya usse zyada, chahe 50 saal kyu na ho) guzar chuke hain? Agar haan, toh approve kar dega.
+    1. Kya pending user ne community leave kar di hai?
+    2. Kya leave kiye hue 7 ghante ya usse zyada (chahe 50 saal kyu na ho) guzar chuke hain? Agar haan, toh approve kar dega.
     """
-    await asyncio.sleep(10)  # Bot start hone ke 10 seconds baad pehli baar chalega
+    await asyncio.sleep(15)  # Bot fully start hone ke baad pehli baar chalega
     while True:
         try:
             pending_data = load_pending_requests()
@@ -130,36 +128,28 @@ async def background_pending_checker(application: Application):
                     chat_id = info["chat_id"]
                     
                     try:
-                        # Check karein ke user abhi community mein hai ya nahi
                         member = await bot.get_chat_member(chat_id=COMMUNITY_CHAT_ID, user_id=user_id)
                         still_in_community = member.status in ["member", "administrator", "creator"]
                     except Exception:
                         still_in_community = False
 
                     if still_in_community:
-                        # Agar wapas community join kar li hai ya andar hi hai, toh timer reset/clear kar dein
                         updated_data[user_key]["left_timestamp"] = None
                     else:
-                        # Agar user ne community leave kar di hai
                         if updated_data[user_key]["left_timestamp"] is None:
-                            # Pehli baar pata chala ke leave kiya hai, toh current time record kar lein
                             updated_data[user_key]["left_timestamp"] = current_time.isoformat()
                             logger.info(f"User {user_id} ne community leave kar di hai. 7 ghante ka countdown shuru ho gaya hai.")
                         else:
-                            # Check karein ke leave kiye hue kitna waqt ho gaya hai
                             left_time = datetime.fromisoformat(updated_data[user_key]["left_timestamp"])
                             time_diff = current_time - left_time
 
-                            # Agar 7 ghante ya usse zyada ho gaye hain
                             if time_diff >= timedelta(hours=7):
                                 try:
                                     await bot.approve_chat_join_request(chat_id=chat_id, user_id=user_id)
                                     logger.info(f"User {user_id} ko community leave kiye hue 7+ hours ho gaye thay, request approved!")
-                                    # Approve hone ke baad list se hata dein
                                     del updated_data[user_key]
                                 except Exception as e:
                                     logger.error(f"Approval error for user {user_id}: {e}")
-                                    # Agar request expire ho chuki hogi toh bhi list se nikal dein taake error loop na bane
                                     del updated_data[user_key]
 
                 save_pending_requests(updated_data)
@@ -167,7 +157,6 @@ async def background_pending_checker(application: Application):
         except Exception as e:
             logger.error(f"Error in background pending checker loop: {e}")
 
-        # Har 10 minutes baad dobara check karega
         await asyncio.sleep(600)
 
 
@@ -243,15 +232,15 @@ def main() -> None:
         owner_user_bridge(u, c)
     )))
 
-    # Background loop ko bot start hone ke sath hi run kar dein
+    # Proper post_init hook jo bot initialization ke baad background task ko safe tareeqay se run karega
     async def post_init(app: Application):
         asyncio.create_task(background_pending_checker(app))
 
     application.post_init = post_init
 
-    print("Bot is up and running with permanent pending tracking system...")
-    application.run_polling()
+    print("Bot is up and running with fixed initialization and permanent tracking system...")
+    application.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
-        
+    
