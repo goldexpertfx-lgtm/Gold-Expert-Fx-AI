@@ -47,10 +47,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
     
     keyboard = [
-        [InlineKeyboardButton("💎 VIP Packages", callback_data="vip_packages"),
-         InlineKeyboardButton("📈 Account Management", callback_data="account_management")],
-        [InlineKeyboardButton("🔗 Broker Guide & Setup", callback_data="broker_setup"),
-         InlineKeyboardButton("👥 Community & Channels", callback_data="community")],
+        
         [InlineKeyboardButton("🌐 Visit Website", url=WEBSITE_URL)]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
