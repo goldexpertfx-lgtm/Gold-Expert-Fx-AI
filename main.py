@@ -1,151 +1,129 @@
-import asyncio
+import os
 import logging
-from datetime import datetime, timedelta
-from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder,
-    ContextTypes,
-    ChatJoinRequestHandler,
-    MessageHandler,
-    filters,
-)
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
-# Logging Setup
+# Enable logging
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# ================= CONFIGURATION =================
-BOT_TOKEN = "8851943854:AAEflzhn0eOh4345gmekFRcZBgpn72REaqc"
-COMMUNITY_CHAT_ID = -4477244119  # Apni Community ki ID yahan dalein
-PRIVATE_CHANNEL_ID = -3870933647  # Apne Private Channel ki ID yahan dalein
+# Environment variables se Token uthayega (Render par Environment Variable mein BOT_TOKEN set karein)
+TOKEN = os.getenv("BOT_TOKEN", "8851943854:AAEflzhn0eOh4345gmekFRcZBgpn72REaqc")
+WEBSITE_URL = "https://goldexpertfx.com/"
 
-# Whitelisted Links jo delete nahi honi chahiye
-WHITELISTED_LINKS = [
-    "brokeraccountguide.com",
-    "t.me/goldexpertfxcommunity",
-    "telegram.me/+ri2sc_tdify5nti1",
-]
-
-# Dictionary to track pending requests: {user_id: {"chat_id": chat_id}}
-pending_requests = {}
-# =================================================
-
-
-def contains_unauthorized_link(text: str) -> bool:
-    if not text:
-        return False
+# --- START COMMAND ---
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    welcome_text = (
+        f"👋 **Welcome to Gold Expert Fx AI, {user.first_name}!**\n\n"
+        f"Your ultimate gateway for professional XAUUSD (Gold) market analysis, VIP signals, and account management services.\n\n"
+        f"Choose an option below or visit our official website: {WEBSITE_URL}"
+    )
     
-    text_lower = text.lower()
-    if "http://" in text_lower or "https://" in text_lower or "www." in text_lower or "t.me/" in text_lower or "telegram.me/" in text_lower:
-        for white_link in WHITELISTED_LINKS:
-            if white_link in text_lower:
-                return False  # Whitelisted link found, do not delete
-        return True  # Unauthorized link found
-    return False
-
-
-async def link_filter_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message = update.message or update.effective_message
-    if not message or not message.from_user:
-        return
-
-    user = message.from_user
-    chat = message.chat
-
-    if chat.id not in [COMMUNITY_CHAT_ID, PRIVATE_CHANNEL_ID]:
-        return
-
-    # Check if sender is Owner
-    try:
-        chat_member = await context.bot.get_chat_member(chat.id, user.id)
-        if chat_member.status == "creator":
-            return  # Owner link can't be deleted
-    except Exception as e:
-        logger.error(f"Error checking chat member status: {e}")
-
-    is_forwarded = message.forward_date is not None
-    text_to_check = message.text or message.caption or ""
+    keyboard = [
+        [InlineKeyboardButton("💎 VIP Packages", callback_data="vip_packages"),
+         InlineKeyboardButton("📈 Account Management", callback_data="account_management")],
+        [InlineKeyboardButton("🔗 Broker Guide & Setup", callback_data="broker_setup"),
+         InlineKeyboardButton("👥 Community & Channels", callback_data="community")],
+        [InlineKeyboardButton("🌐 Visit Website", url=WEBSITE_URL)]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
     
-    if contains_unauthorized_link(text_to_check) or (is_forwarded and ("http" in text_to_check.lower() or "t.me" in text_to_check.lower())):
-        try:
-            await message.delete()
-            logger.info(f"Deleted unauthorized link from user {user.id} in chat {chat.id}")
-        except Exception as e:
-            logger.error(f"Failed to delete message: {e}")
+    await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode="Markdown")
 
+# --- HELP COMMAND ---
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    help_text = (
+        "🤖 **Gold Expert Fx Bot Commands:**\n\n"
+        "/start - Launch the main menu\n"
+        "/vip_packages - View active VIP membership plans\n"
+        "/account_management - Learn about our account management services\n"
+        "/broker_setup - Get broker registration and partner guide\n"
+        "/community - Join our official discussion group\n"
+        "/support - Connect with admin assistance"
+    )
+    await update.message.reply_text(help_text, parse_mode="Markdown")
 
-async def handle_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    request = update.chat_join_request
-    if not request:
-        return
+# --- VIP PACKAGES COMMAND ---
+async def vip_packages(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    text = (
+        "💎 **VIP Membership Packages**\n\n"
+        "Get high-accuracy XAUUSD trading signals and daily institutional market breakdowns.\n\n"
+        f"👉 Select and purchase your package directly on our website: {WEBSITE_URL}"
+    )
+    keyboard = [[InlineKeyboardButton("🌐 Open VIP Store", url=WEBSITE_URL)]]
+    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
-    user_id = request.from_user.id
-    chat_id = request.chat.id
+# --- ACCOUNT MANAGEMENT COMMAND ---
+async def account_management(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    text = (
+        "📈 **Professional Account Management**\n\n"
+        "Let our expert traders manage your trading account with strict risk management and steady growth targets on Gold.\n\n"
+        f"👉 Check terms and requirements on our website: {WEBSITE_URL}"
+    )
+    keyboard = [[InlineKeyboardButton("🌐 View Management Plans", url=WEBSITE_URL)]]
+    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
-    if chat_id != PRIVATE_CHANNEL_ID:
-        return
+# --- BROKER SETUP COMMAND ---
+async def broker_setup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    text = (
+        "🔗 **Broker Account Setup & Guide**\n\n"
+        "Follow our step-by-step registration guide and link your partner code to unlock exclusive benefits.\n\n"
+        f"👉 Visit Broker Guide: {WEBSITE_URL}"
+    )
+    keyboard = [[InlineKeyboardButton("🌐 Open Broker Guide", url=WEBSITE_URL)]]
+    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
-    try:
-        community_member = await context.bot.get_chat_member(COMMUNITY_CHAT_ID, user_id)
-        is_in_community = community_member.status in ["member", "administrator", "creator"]
-    except Exception:
-        is_in_community = False
+# --- COMMUNITY COMMAND ---
+async def community(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    text = (
+        "👥 **Gold Expert Fx Community**\n\n"
+        "Connect with fellow traders, share chart analysis, and discuss daily market trends.\n\n"
+        f"👉 Join via website links: {WEBSITE_URL}"
+    )
+    await update.message.reply_text(text, parse_mode="Markdown")
 
-    if is_in_community:
-        pending_requests[user_id] = {"chat_id": chat_id}
-        logger.info(f"User {user_id} is in Community. Holding private channel join request.")
-    else:
-        try:
-            await context.bot.approve_chat_join_request(chat_id=chat_id, user_id=user_id)
-            logger.info(f"User {user_id} approved directly (not in community).")
-        except Exception as e:
-            logger.error(f"Error approving direct join request: {e}")
+# --- SUPPORT COMMAND ---
+async def support(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    text = "💬 For any support or queries, please reach out through our official website or contact our admin team directly."
+    keyboard = [[InlineKeyboardButton("🌐 Visit Support", url=WEBSITE_URL)]]
+    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
+# --- BUTTON CLICK HANDLER (CALLBACK QUERY) ---
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    
+    if query.data == "vip_packages":
+        await vip_packages(query, context)
+    elif query.data == "account_management":
+        await account_management(query, context)
+    elif query.data == "broker_setup":
+        await broker_setup(query, context)
+    elif query.data == "community":
+        await community(query, context)
 
-async def background_request_scanner(context: ContextTypes.DEFAULT_TYPE):
-    to_approve = []
+# --- MAIN FUNCTION ---
+def main() -> None:
+    application = Application.builder().token(TOKEN).build()
 
-    for user_id, data in list(pending_requests.items()):
-        chat_id = data["chat_id"]
-        try:
-            community_member = await context.bot.get_chat_member(COMMUNITY_CHAT_ID, user_id)
-            still_in_community = community_member.status in ["member", "administrator", "creator"]
-        except Exception:
-            still_in_community = False
+    # Command Handlers
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("vip_packages", vip_packages))
+    application.add_handler(CommandHandler("account_management", account_management))
+    application.add_handler(CommandHandler("broker_setup", broker_setup))
+    application.add_handler(CommandHandler("community", community))
+    application.add_handler(CommandHandler("support", support))
 
-        if not still_in_community:
-            to_approve.append((chat_id, user_id))
+    # Callback Query Handler for Inline Buttons
+    application.add_handler(CallbackQueryHandler(button_handler))
 
-    for chat_id, user_id in to_approve:
-        try:
-            await context.bot.approve_chat_join_request(chat_id=chat_id, user_id=user_id)
-            logger.info(f"Approved pending request for user {user_id} as they left the community.")
-            del pending_requests[user_id]
-        except Exception as e:
-            logger.error(f"Error approving delayed join request: {e}")
-
-
-async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    logger.error(msg="Exception while handling an update:", exc_info=context.error)
-
-
-def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-
-    app.add_handler(ChatJoinRequestHandler(handle_join_request))
-    app.add_handler(MessageHandler(filters.TEXT | filters.CAPTION, link_filter_handler))
-    app.add_error_handler(error_handler)
-
-    # Job Queue
-    job_queue = app.job_queue
-    if job_queue:
-        job_queue.run_repeating(background_request_scanner, interval=300, first=10)
-
+    # Start the Bot
     print("Bot is running...")
-    app.run_polling(drop_pending_updates=True)
-
+    application.run_polling()
 
 if __name__ == "__main__":
     main()
