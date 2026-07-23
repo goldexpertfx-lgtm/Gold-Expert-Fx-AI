@@ -19,10 +19,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-TOKEN = os.getenv("8851943854:AAE75yklD4D3pR8xEQ7hVNkk3VtXLKiA-9M", "8851943854:AAE75yklD4D3pR8xEQ7hVNkk3VtXLKiA-9M")
+TOKEN = os.getenv("BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID", "YOUR_TELEGRAM_OWNER_ID"))
-COMMUNITY_CHAT_ID = os.getenv("4477244119", "@GoldExpertFxCommunity")
-PRIVATE_CHANNEL_ID = os.getenv("3870933647", "YOUR_PRIVATE_CHANNEL_ID")
+COMMUNITY_CHAT_ID = os.getenv("COMMUNITY_CHAT_ID", "@GoldExpertFxCommunity")
+PRIVATE_CHANNEL_ID = os.getenv("PRIVATE_CHANNEL_ID", "YOUR_PRIVATE_CHANNEL_ID")
 WEBSITE_URL = "https://goldexpertfx.com/"
 
 # Whitelisted links jo delete nahi honge
