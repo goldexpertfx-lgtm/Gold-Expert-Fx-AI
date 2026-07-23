@@ -19,7 +19,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-TOKEN = os.getenv("BOT_TOKEN", "8851943854:AAEflzhn0eOh4345gmekFRcZBgpn72REaqc")
+TOKEN = os.getenv("8851943854:AAE75yklD4D3pR8xEQ7hVNkk3VtXLKiA-9M", "8851943854:AAE75yklD4D3pR8xEQ7hVNkk3VtXLKiA-9M")
 OWNER_ID = int(os.getenv("OWNER_ID", "YOUR_TELEGRAM_OWNER_ID"))
 COMMUNITY_CHAT_ID = os.getenv("4477244119", "@GoldExpertFxCommunity")
 PRIVATE_CHANNEL_ID = os.getenv("3870933647", "YOUR_PRIVATE_CHANNEL_ID")
