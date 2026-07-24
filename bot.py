@@ -10,7 +10,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 logging.basicConfig(level=logging.INFO)
 
 # --- CONFIGURATION ---
-API_TOKEN = "YOUR_BOT_TOKEN_HERE"  # Replace with your Telegram Bot Token
+API_TOKEN = "8851943854:AAF1Nveghbto-fE0yOv_l0eyVrfoaiSo7oU"  # Replace with your Telegram Bot Token
 OWNER_ID = 7415265825  # Owner Telegram User ID
 
 COMMUNITY_USERNAME = "GoldExpertFxCommunity"  # Without @ or full link depending on checks
