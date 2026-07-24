@@ -1,7 +1,7 @@
 import asyncio
 import logging
+import os
 import re
-from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, F, Router, types
 from aiogram.filters import CommandStart
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
@@ -10,10 +10,9 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 logging.basicConfig(level=logging.INFO)
 
 # --- CONFIGURATION ---
-API_TOKEN = "8851943854:AAF1Nveghbto-fE0yOv_l0eyVrfoaiSo7oU"  # Replace with your Telegram Bot Token
+API_TOKEN = os.getenv("BOT_TOKEN")  # Loads automatically from Render environment
 OWNER_ID = 7415265825  # Owner Telegram User ID
 
-COMMUNITY_USERNAME = "GoldExpertFxCommunity"  # Without @ or full link depending on checks
 COMMUNITY_ID_OR_USERNAME = "@GoldExpertFxCommunity"
 PRIVATE_CHANNEL_LINK = "https://telegram.me/+Ri2SC_TdIFY5NTI1"
 
@@ -22,14 +21,13 @@ WHITESLISTED_DOMAINS = [
     "goldexpertfx.com",
     "brokeraccountguide.com",
     "t.me/AnasAkram",
-    "https://telegram.me/+Ri2SC_TdIFY5NTI1",
 ]
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
 router = Router()
 
-# In-memory storage for tracking pending approvals after leaving (In production, use a database like SQLite/PostgreSQL)
+# In-memory storage for pending leaves tracking
 pending_leave_cache = {}  # {user_id: target_chat_id}
 
 
@@ -46,23 +44,21 @@ async def is_user_in_community(user_id: int) -> bool:
   return False
 
 
-# 1. JOIN REQUEST HANDLER
+# 1. JOIN REQUEST LOGIC HANDLER
 @router.chat_join_request()
-async def handle_join_request(
-    join_request: types.ChatJoinRequest,
-):
+async def handle_join_request(join_request: types.ChatJoinRequest):
   user_id = join_request.from_user.id
   chat_id = join_request.chat.id
 
-  # Check if user is in community
   in_community = await is_user_in_community(user_id)
 
   if in_community:
-    # Keep pending indefinitely. Store for delayed approval when they leave.
+    # User is in community -> Keep request pending indefinitely until they leave
     pending_leave_cache[user_id] = chat_id
-    return  # Do nothing, let it stay pending
+    return
   else:
-    # If not in community or brand new, approve instantly (1 second delay simulated or direct)
+    # Check if they were ever in community or completely new
+    # If not in community, approve instantly (1 second delay)
     await asyncio.sleep(1)
     try:
       await bot.approve_chat_join_request(chat_id=chat_id, user_id=user_id)
@@ -70,14 +66,14 @@ async def handle_join_request(
       logging.error(f"Failed to approve request: {e}")
 
 
-# Background task to monitor user leaving community and trigger 5-7 hour delay approval
+# Background task to monitor user leaving community -> approve after 5-7 hours (6 hours)
 async def monitor_community_leaves():
   while True:
     await asyncio.sleep(600)  # Check every 10 minutes
     for user_id, chat_id in list(pending_leave_cache.items()):
       still_in = await is_user_in_community(user_id)
       if not still_in:
-        # User left the community! Trigger 5-7 hours delay (e.g., 6 hours = 21600 seconds)
+        # User left! Trigger 6 hours delay (21600 seconds)
         asyncio.create_task(delayed_approval(user_id, chat_id, delay=21600))
         pending_leave_cache.pop(user_id, None)
 
@@ -94,9 +90,7 @@ async def delayed_approval(user_id: int, chat_id: int, delay: int):
 @router.message(
     F.text
     | F.caption
-    & (
-        F.chat.type.in_(["supergroup", "group", "channel"])
-    )
+    & (F.chat.type.in_ (["supergroup", "group", "channel"]))
 )
 async def moderate_links(message: types.Message):
   # Skip if sender is the owner
@@ -128,8 +122,9 @@ async def cmd_start(message: types.Message):
 
   welcome_text = (
       "Welcome to Gold Expert Fx!\n\n"
-      "I am the Gold Expert Fx AI. Feel free to ask any questions related to Gold Expert Fx, and you will get your answers in English.\n\n"
-      "Explore our resources below:"
+      "This is Gold Expert Fx AI. Whatever question you ask, you will get its"
+      " answer. Your questions should be related to Gold Expert Fx, in"
+      " English.\n\nExplore our links below:"
   )
 
   keyboard = InlineKeyboardMarkup(
@@ -156,11 +151,10 @@ async def cmd_start(message: types.Message):
   await message.answer(welcome_text, reply_markup=keyboard)
 
 
-# Forward user messages to Owner in Private Chat
+# Forward user messages to Owner in Private Chat & handle owner replies
 @router.message(F.chat.type == "private")
 async def forward_to_owner(message: types.Message):
   if message.from_user.id == OWNER_ID:
-    # If owner is replying to a forwarded message
     if message.reply_to_message and message.reply_to_message.forward_from:
       target_user_id = message.reply_to_message.forward_from.id
       try:
@@ -176,7 +170,7 @@ async def forward_to_owner(message: types.Message):
 
   # Forward user message to Owner
   try:
-    forwarded = await message.forward(chat_id=OWNER_ID)
+    await message.forward(chat_id=OWNER_ID)
     await bot.send_message(
         chat_id=OWNER_ID,
         text=(
@@ -187,18 +181,6 @@ async def forward_to_owner(message: types.Message):
     )
   except Exception as e:
     logging.error(f"Failed to forward message to owner: {e}")
-
-
-# 4. SECURITY & BAN PROTECTION (Anti-Report / Anti-Attack)
-@router.message(
-    F.successful_payment
-    | F.new_chat_members
-    | F.left_chat_member
-    | F.pinned_message
-)
-async def security_monitor(message: types.Message):
-  # Placeholder for security hooks if suspicious mass-reporting patterns or abuse occurs
-  pass
 
 
 async def main():
